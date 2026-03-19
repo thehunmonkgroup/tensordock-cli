@@ -19,8 +19,17 @@ var (
 	rootCmd = &cobra.Command{
 		Use:          "tensordock-cli",
 		Short:        "TensorDock v2 CLI",
+		Version:      api.ClientVersion,
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			versionRequested, err := cmd.Flags().GetBool("version")
+			if err != nil {
+				return err
+			}
+			if versionRequested {
+				return nil
+			}
+
 			if cmd == configCmd {
 				return nil
 			}
@@ -52,6 +61,35 @@ var (
 	}
 )
 
+const rootHelpTemplate = `TensorDock v2 CLI {{.Root.Version}}
+
+{{if .HasParent}}{{with (or .Long .Short)}}{{. | trimTrailingWhitespaces}}
+
+{{end}}{{end}}{{if or .Runnable .HasSubCommands}}Usage:{{if .Runnable}}
+  {{.UseLine}}{{end}}{{if .HasAvailableSubCommands}}
+  {{.CommandPath}} [command]{{end}}{{end}}{{if gt (len .Aliases) 0}}
+
+Aliases:
+  {{.NameAndAliases}}{{end}}{{if .HasExample}}
+
+Examples:
+{{.Example}}{{end}}{{if .HasAvailableSubCommands}}
+
+Available Commands:{{range .Commands}}{{if (or .IsAvailableCommand (eq .Name "help"))}}
+  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableLocalFlags}}
+
+Flags:
+{{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}{{if .HasAvailableInheritedFlags}}
+
+Global Flags:
+{{.InheritedFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}{{if .HasHelpSubCommands}}
+
+Additional help topics:{{range .Commands}}{{if .IsAdditionalHelpTopicCommand}}
+  {{rpad .CommandPath .CommandPathPadding}} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableSubCommands}}
+
+Use "{{.CommandPath}} [command] --help" for more information about a command.{{end}}
+`
+
 func Execute() {
 	err := rootCmd.Execute()
 	if err != nil {
@@ -61,6 +99,9 @@ func Execute() {
 
 func init() {
 	cobra.OnInitialize(initConfig)
+	rootCmd.SetHelpTemplate(rootHelpTemplate)
+	rootCmd.SetVersionTemplate("{{.Version}}\n")
+	rootCmd.InitDefaultVersionFlag()
 
 	pflags := rootCmd.PersistentFlags()
 	pflags.StringVar(&cfgFile, "config", "", "config file (default is $HOME/.tensordock.yml)")
