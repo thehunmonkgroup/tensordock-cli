@@ -1,158 +1,148 @@
 package commands
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/caguiclajmg/tensordock-cli/api"
 	"github.com/jedib0t/go-pretty/v6/table"
-	"github.com/pkg/browser"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+	"gopkg.in/yaml.v3"
 )
 
 var (
 	serversCmd = &cobra.Command{
 		Use:   "servers",
-		Short: "Manage servers",
+		Short: "Manage instances",
 	}
 	listCmd = &cobra.Command{
 		Use:   "list",
-		Short: "List servers",
+		Short: "List instances",
 		RunE:  serverList,
 	}
 	infoCmd = &cobra.Command{
-		Use:   "info [flags] server_id",
-		Short: "Get server info",
+		Use:   "info [flags] instance_id",
+		Short: "Get instance info",
 		Args:  cobra.ExactArgs(1),
 		RunE:  serverInfo,
 	}
 	startCmd = &cobra.Command{
-		Use:     "start [flags] server_id",
-		Short:   "Start a server",
+		Use:     "start [flags] instance_id",
+		Short:   "Start an instance",
 		Args:    cobra.ExactArgs(1),
 		RunE:    startServer,
 		PostRun: logAction("success"),
 	}
 	stopCmd = &cobra.Command{
-		Use:     "stop [flags] server_id",
-		Short:   "Stop a server",
+		Use:     "stop [flags] instance_id",
+		Short:   "Stop an instance",
 		Args:    cobra.ExactArgs(1),
 		RunE:    stopServer,
 		PostRun: logAction("success"),
 	}
 	deleteCmd = &cobra.Command{
-		Use:     "delete [flags] server_id",
-		Short:   "Delete a server",
+		Use:     "delete [flags] instance_id",
+		Short:   "Delete an instance",
 		Args:    cobra.ExactArgs(1),
 		RunE:    deleteServer,
 		PostRun: logAction("success"),
 	}
 	deployCmd = &cobra.Command{
-		Use:     "deploy [flags] name admin_user admin_pass",
-		Short:   "Deploy a server",
-		Args:    cobra.ExactArgs(3),
+		Use:     "deploy [flags] name [admin_user] [admin_pass]",
+		Short:   "Create an instance",
+		Args:    cobra.RangeArgs(1, 3),
 		RunE:    deployServer,
 		PostRun: logAction("success"),
 	}
 	manageCmd = &cobra.Command{
-		Use:   "manage server_id",
-		Short: "Open server management panel in a browser",
+		Use:   "manage instance_id",
+		Short: "Compatibility placeholder for dashboard management",
 		Args:  cobra.ExactArgs(1),
 		RunE:  manageServer,
 	}
 	sshCmd = &cobra.Command{
-		Use:   "ssh server_id",
-		Short: "Launch an SSH sesion with a server",
+		Use:   "ssh instance_id",
+		Short: "Launch an SSH session with an instance",
 		Args:  cobra.ExactArgs(1),
 		RunE:  sshServer,
 	}
-	restartCmd = &cobra.Command{
-		Use:     "restart [flags] server_id",
-		Short:   "Restart a server",
-		Args:    cobra.ExactArgs(1),
-		RunE:    restartServer,
-		PostRun: logAction("success"),
-	}
 	modifyCmd = &cobra.Command{
-		Use:     "modify [flags] server_id",
-		Short:   "Modify a server",
+		Use:     "modify [flags] instance_id",
+		Short:   "Modify instance resources",
 		Args:    cobra.ExactArgs(1),
 		RunE:    modifyServer,
 		PostRun: logAction("success"),
-	}
-	statusCmd = &cobra.Command{
-		Use:   "status server_id",
-		Short: "Get server status",
-		Args:  cobra.ExactArgs(1),
-		RunE:  serverStatus,
 	}
 )
 
 func init() {
 	serversCmd.AddCommand(listCmd)
-
 	serversCmd.AddCommand(infoCmd)
-
 	serversCmd.AddCommand(stopCmd)
-
 	serversCmd.AddCommand(startCmd)
-
 	serversCmd.AddCommand(deleteCmd)
-
 	serversCmd.AddCommand(deployCmd)
-	deployCmd.Flags().String("gpuModel", "Quadro_4000", "The GPU model that you would like to provision")
-	deployCmd.Flags().String("location", "na-us-chi-1", "Location")
-	deployCmd.Flags().String("instanceType", "gpu", "Either \"gpu\" or \"cpu\"")
-	deployCmd.Flags().Int("gpuCount", 1, "The number of GPUs of the model you specified earlier")
-	deployCmd.Flags().String("cpuModel", "Intel_Xeon_v4", "The CPU model that you would like to provision")
-	deployCmd.Flags().Int("vcpus", 2, "Number of vCPUs that you would like")
-	deployCmd.Flags().Int("storage", 20, "Number of GB of networked storage")
-	deployCmd.Flags().String("storageClass", "io1", "io1 or st1, depending on storage class desired")
-	deployCmd.Flags().Int("ram", 4, "Number of GB of RAM to be deployed.")
-	deployCmd.Flags().String("os", "Ubuntu 20.04 LTS", "Operating system")
-
 	serversCmd.AddCommand(manageCmd)
-
 	serversCmd.AddCommand(sshCmd)
-	sshCmd.Flags().String("bin", "ssh", "Name of SSH client executable (e.g. ssh, mosh)")
+	serversCmd.AddCommand(modifyCmd)
+
+	deployCmd.Flags().String("locationId", "", "Location UUID for location-based deployment")
+	deployCmd.Flags().String("hostnodeId", "", "Hostnode UUID for direct deployment")
+	deployCmd.Flags().String("image", "ubuntu2404", "Image identifier")
+	deployCmd.Flags().String("os", "", "Compatibility alias for --image")
+	deployCmd.Flags().Bool("dedicatedIp", false, "Request a dedicated IP")
+	deployCmd.Flags().StringArray("portForward", nil, "Port forward in internal:external form")
+	deployCmd.Flags().String("sshKey", "", "SSH public key content")
+	deployCmd.Flags().String("sshKeySecretId", "", "Secret ID containing an SSH key")
+	deployCmd.Flags().String("cloudInitFile", "", "Path to JSON or YAML cloud-init object")
+	deployCmd.Flags().String("gpuModel", "", "GPU model v0 name")
+	deployCmd.Flags().Int("gpuCount", 0, "Number of GPUs")
+	deployCmd.Flags().Int("vcpus", 4, "Number of vCPUs")
+	deployCmd.Flags().Int("ram", 8, "RAM in GB")
+	deployCmd.Flags().Int("storage", 100, "Storage in GB")
+
+	sshCmd.Flags().String("bin", "ssh", "Name of SSH client executable")
 	sshCmd.Flags().String("user", "user", "User account to use for login")
 	sshCmd.Flags().String("extraFlags", "", "Extra flags to pass to the SSH client")
 
-	serversCmd.AddCommand(restartCmd)
-
-	serversCmd.AddCommand(modifyCmd)
-	modifyCmd.Flags().String("instanceType", "gpu", "Either \"gpu\" or \"cpu\"")
-	modifyCmd.Flags().String("gpuModel", "Quadro_4000", "The GPU model that you would like to provision")
-	modifyCmd.Flags().Int("gpuCount", 1, "The number of GPUs of the model you specified earlier")
-	modifyCmd.Flags().String("cpuModel", "Intel_Xeon_v4", "The CPU model that you would like to provision")
-	modifyCmd.Flags().Int("vcpus", 2, "Number of vCPUs that you would like")
-	modifyCmd.Flags().Int("storage", 20, "Number of GB of networked storage")
-	modifyCmd.Flags().Int("ram", 4, "Number of GB of RAM to be deployed.")
-
-	serversCmd.AddCommand(statusCmd)
+	modifyCmd.Flags().Int("cpuCores", 0, "CPU cores (step of 2)")
+	modifyCmd.Flags().Int("ramGb", 0, "RAM in GB")
+	modifyCmd.Flags().Int("diskGb", 0, "Disk in GB")
+	modifyCmd.Flags().String("gpuModel", "", "GPU model v0 name")
+	modifyCmd.Flags().Int("gpuCount", 0, "GPU count")
+	modifyCmd.Flags().Int("vcpus", 0, "Compatibility alias for --cpuCores")
+	modifyCmd.Flags().Int("ram", 0, "Compatibility alias for --ramGb")
+	modifyCmd.Flags().Int("storage", 0, "Compatibility alias for --diskGb")
 
 	rootCmd.AddCommand(serversCmd)
 }
 
 func serverList(cmd *cobra.Command, args []string) error {
-	res, err := client.ListServers()
+	instances, err := client.ListInstances()
 	if err != nil {
 		return err
 	}
 
-	if !res.Success {
-		return errors.New(res.Error)
-	}
-
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
-	t.AppendHeader(table.Row{"Id", "Name", "Location", "Status"})
-	for _, elem := range res.Servers {
-		t.AppendRow(table.Row{elem.Id, elem.Name, elem.Location, elem.Status})
+	t.AppendHeader(table.Row{"ID", "Name", "Status"})
+	for _, instance := range instances {
+		name := instance.Name
+		status := instance.Status
+		if name == "" {
+			name = instance.Attributes.Name
+		}
+		if status == "" {
+			status = instance.Attributes.Status
+		}
+		t.AppendRow(table.Row{instance.ID, name, status})
 	}
 	t.Render()
 
@@ -160,42 +150,38 @@ func serverList(cmd *cobra.Command, args []string) error {
 }
 
 func serverInfo(cmd *cobra.Command, args []string) error {
-	server := args[0]
-	res, err := client.GetServer(server)
+	instance, err := client.GetInstance(args[0])
 	if err != nil {
 		return err
 	}
 
-	if !res.Success {
-		return errors.New(res.Error)
-	}
-
-	props := []map[string]string{
-		{"name": "ID", "value": res.Server.Id},
-		{"name": "Name", "value": res.Server.Name},
-		{"name": "Location", "value": res.Server.Location},
-		{"name": "IP", "value": res.Server.Ip},
-		{"name": "Charged Cost", "value": fmt.Sprintf("%v", res.Server.Cost.Charged)},
-		{"name": "Hour-On Cost", "value": fmt.Sprintf("%v", res.Server.Cost.HourOn)},
-		{"name": "Hour-Off Cost", "value": fmt.Sprintf("%v", res.Server.Cost.HourOff)},
-		{"name": "Minutes-On", "value": fmt.Sprintf("%v", res.Server.Cost.MinutesOn)},
-		{"name": "Minutes-Off", "value": fmt.Sprintf("%v", res.Server.Cost.MinutesOff)},
-		{"name": "CPU Model", "value": res.Server.CPUModel},
-		{"name": "GPU Count", "value": strconv.Itoa(res.Server.GPUCount)},
-		{"name": "GPU Model", "value": res.Server.GPUModel},
-		{"name": "RAM", "value": fmt.Sprintf("%vGB", res.Server.Ram)},
-		{"name": "Status", "value": res.Server.Status},
-		{"name": "Storage", "value": fmt.Sprintf("%vGB", res.Server.Storage)},
-		{"name": "Storage Class", "value": res.Server.StorageClass},
-		{"name": "Type", "value": res.Server.Type},
-		{"name": "vCPUs", "value": strconv.Itoa(res.Server.VCPUs)},
+	props := []table.Row{
+		{"ID", instance.ID},
+		{"Name", instance.Name},
+		{"Status", instance.Status},
+		{"IP Address", instance.IPAddress},
+		{"Rate Hourly", fmt.Sprintf("%v", instance.RateHourly)},
+		{"vCPUs", instance.Resources.VCPUCount},
+		{"RAM (GB)", instance.Resources.RAMGB},
+		{"Storage (GB)", instance.Resources.StorageGB},
 	}
 
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
 	t.AppendHeader(table.Row{"Property", "Value"})
-	for _, elem := range props {
-		t.AppendRow(table.Row{elem["name"], elem["value"]})
+	for _, row := range props {
+		t.AppendRow(row)
+	}
+
+	if len(instance.Resources.GPUs) > 0 {
+		for name, gpu := range instance.Resources.GPUs {
+			t.AppendRow(table.Row{"GPU", fmt.Sprintf("%s x%d", firstNonEmpty(gpu.V0Name, name), gpu.Count)})
+		}
+	}
+	if len(instance.PortForwards) > 0 {
+		for _, portForward := range instance.PortForwards {
+			t.AppendRow(table.Row{"Port Forward", fmt.Sprintf("%d:%d", portForward.InternalPort, portForward.ExternalPort)})
+		}
 	}
 	t.Render()
 
@@ -203,334 +189,368 @@ func serverInfo(cmd *cobra.Command, args []string) error {
 }
 
 func startServer(cmd *cobra.Command, args []string) error {
-	server := args[0]
-	res, err := client.StartServer(server)
-	if err != nil {
-		return err
-	}
-
-	if !res.Success {
-		return errors.New(res.Error)
-	}
-
-	return nil
+	_, err := client.StartInstance(args[0])
+	return err
 }
 
 func stopServer(cmd *cobra.Command, args []string) error {
-	server := args[0]
-	res, err := client.StopServer(server)
-	if err != nil {
-		return err
-	}
-
-	if !res.Success {
-		return errors.New(res.Error)
-	}
-
-	return nil
+	_, err := client.StopInstance(args[0])
+	return err
 }
 
 func deleteServer(cmd *cobra.Command, args []string) error {
-	server := args[0]
-	res, err := client.DeleteServer(server)
-	if err != nil {
-		return err
-	}
-
-	if !res.Success {
-		return errors.New(res.Error)
-	}
-
-	return nil
+	_, err := client.DeleteInstance(args[0])
+	return err
 }
 
 func deployServer(cmd *cobra.Command, args []string) error {
 	flags := cmd.Flags()
+	if len(args) > 1 {
+		log.Print("warning: legacy admin_user/admin_pass arguments are ignored by the v2 API")
+	}
 
-	instanceType, err := flags.GetString("instanceType")
+	locationID, err := flags.GetString("locationId")
 	if err != nil {
 		return err
 	}
+	hostnodeID, err := flags.GetString("hostnodeId")
+	if err != nil {
+		return err
+	}
+	if locationID == "" && hostnodeID == "" {
+		return errors.New("either --locationId or --hostnodeId is required")
+	}
+	if locationID != "" && hostnodeID != "" {
+		return errors.New("--locationId and --hostnodeId are mutually exclusive")
+	}
 
+	image, err := resolvedImage(flags)
+	if err != nil {
+		return err
+	}
 	gpuModel, err := flags.GetString("gpuModel")
 	if err != nil {
 		return err
 	}
-
 	gpuCount, err := flags.GetInt("gpuCount")
 	if err != nil {
 		return err
 	}
-
-	cpuModel, err := flags.GetString("cpuModel")
-	if err != nil {
-		return err
-	}
-
 	vcpus, err := flags.GetInt("vcpus")
 	if err != nil {
 		return err
 	}
-
 	ram, err := flags.GetInt("ram")
 	if err != nil {
 		return err
 	}
-
 	storage, err := flags.GetInt("storage")
 	if err != nil {
 		return err
 	}
-
-	storageClass, err := flags.GetString("storageClass")
+	dedicatedIP, err := flags.GetBool("dedicatedIp")
+	if err != nil {
+		return err
+	}
+	portForwardFlags, err := flags.GetStringArray("portForward")
+	if err != nil {
+		return err
+	}
+	portForwards, err := parsePortForwards(portForwardFlags)
+	if err != nil {
+		return err
+	}
+	sshKey, err := resolveSSHKey(flags)
+	if err != nil {
+		return err
+	}
+	cloudInitRaw, err := readCloudInit(flags)
 	if err != nil {
 		return err
 	}
 
-	os, err := flags.GetString("os")
+	if storage < 100 {
+		return errors.New("storage must be at least 100 GB")
+	}
+	if locationID != "" && gpuCount < 1 {
+		return errors.New("location-based deployment requires at least one GPU")
+	}
+	if !strings.HasPrefix(strings.ToLower(image), "windows") && strings.TrimSpace(sshKey) == "" {
+		return errors.New("an SSH key is required for non-Windows images")
+	}
+
+	request := api.InstanceCreateRequest{}
+	request.Data.Type = "virtualmachine"
+	request.Data.Attributes.Name = args[0]
+	request.Data.Attributes.Type = "virtualmachine"
+	request.Data.Attributes.Image = image
+	request.Data.Attributes.Resources = api.InstanceResources{
+		VCPUCount: vcpus,
+		RAMGB:     ram,
+		StorageGB: storage,
+	}
+	if gpuCount > 0 && gpuModel != "" {
+		request.Data.Attributes.Resources.GPUs = map[string]api.GPUCount{
+			gpuModel: {Count: gpuCount},
+		}
+	}
+	request.Data.Attributes.LocationID = locationID
+	request.Data.Attributes.HostnodeID = hostnodeID
+	request.Data.Attributes.UseDedicatedIP = dedicatedIP
+	request.Data.Attributes.PortForwards = portForwards
+	request.Data.Attributes.SSHKey = sshKey
+	request.Data.Attributes.CloudInit = cloudInitRaw
+
+	instance, err := client.CreateInstance(request)
 	if err != nil {
 		return err
 	}
 
-	location, err := flags.GetString("location")
-	if err != nil {
-		return err
-	}
-
-	name := args[0]
-	adminUser := args[1]
-	adminPass := args[2]
-
-	req := api.DeployServerRequest{
-		AdminUser:    adminUser,
-		AdminPass:    adminPass,
-		InstanceType: instanceType,
-		VCPUs:        vcpus,
-		RAM:          ram,
-		Storage:      storage,
-		StorageClass: storageClass,
-		OS:           os,
-		Location:     location,
-		Name:         name,
-	}
-
-	switch instanceType {
-	case "cpu":
-		req.CPUModel = cpuModel
-	case "gpu":
-		req.GPUModel = gpuModel
-		req.GPUCount = gpuCount
-	default:
-		return errors.New("unknown instance type")
-	}
-
-	res, err := client.DeployServer(req)
-
-	if err != nil {
-		return err
-	}
-
-	if !res.Success {
-		return errors.New(res.Error)
-	}
-
-	fmt.Println(res.Server.Id)
-
+	fmt.Println(instance.ID)
 	return nil
 }
 
 func manageServer(cmd *cobra.Command, args []string) error {
-	server := args[0]
-	res, err := client.GetServer(server)
+	// TODO: Review whether the v2 API exposes dashboard management URLs for this command.
+	_, err := client.GetInstance(args[0])
 	if err != nil {
 		return err
 	}
 
-	if !res.Success {
-		return errors.New(res.Error)
-	}
-
-	err = browser.OpenURL(res.Server.Links["dashboard"]["href"])
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return errors.New("servers manage is retained for compatibility but no v2 dashboard URL is documented yet")
 }
 
 func sshServer(cmd *cobra.Command, args []string) error {
-	flags := cmd.Flags()
-
-	server := args[0]
-	res, err := client.GetServer(server)
+	instance, err := client.GetInstance(args[0])
 	if err != nil {
 		return err
 	}
-
-	if !res.Success {
-		return errors.New(res.Error)
+	if instance.IPAddress == "" {
+		return errors.New("instance does not have a public IP address")
 	}
 
+	flags := cmd.Flags()
 	bin, err := flags.GetString("bin")
 	if err != nil {
 		return err
 	}
-
 	user, err := flags.GetString("user")
 	if err != nil {
 		return err
 	}
-
 	extraFlags, err := flags.GetString("extraFlags")
 	if err != nil {
 		return err
 	}
 
-	sshCmd := exec.Command(bin, fmt.Sprintf("%v@%v", user, res.Server.Ip), extraFlags)
+	argv := append(strings.Fields(extraFlags), fmt.Sprintf("%s@%s", user, instance.IPAddress))
+	sshCmd := exec.Command(bin, argv...)
 	sshCmd.Stdin = os.Stdin
 	sshCmd.Stdout = os.Stdout
 	sshCmd.Stderr = os.Stderr
 
-	if err := sshCmd.Run(); err != nil {
-		return err
-	}
-
-	return nil
+	return sshCmd.Run()
 }
 
 func logAction(message string) func(*cobra.Command, []string) {
 	return func(c *cobra.Command, s []string) { log.Println(message) }
 }
 
-func restartServer(cmd *cobra.Command, args []string) error {
-	server := args[0]
-	res, err := client.RestartServer(server)
-	if err != nil {
-		return err
-	}
-
-	if !res.Success {
-		return errors.New(res.Error)
-	}
-
-	return nil
-}
-
 func modifyServer(cmd *cobra.Command, args []string) error {
 	flags := cmd.Flags()
-
-	serverId := args[0]
-
-	var instanceType *string = nil
-	if flags.Changed("instanceType") {
-		instanceTypeVal, err := flags.GetString("instanceType")
-		if err != nil {
-			return err
-		}
-		instanceType = &instanceTypeVal
+	instance, err := client.GetInstance(args[0])
+	if err != nil {
+		return err
+	}
+	if instance.Status != "Stopped" && instance.Status != "StoppedDisassociated" && strings.ToLower(instance.Status) != "stopped" && strings.ToLower(instance.Status) != "stoppeddisassociated" {
+		return errors.New("instance must be stopped or stopped-disassociated before modification")
 	}
 
-	var gpuModel *string = nil
-	if flags.Changed("gpuModel") {
-		gpuModelVal, err := flags.GetString("gpuModel")
-		if err != nil {
-			return err
-		}
-		gpuModel = &gpuModelVal
+	cpuCores, err := intFlagAlias(flags, "cpuCores", "vcpus")
+	if err != nil {
+		return err
 	}
-
-	var gpuCount *int = nil
-	if flags.Changed("gpuCount") {
-		gpuCountVal, err := flags.GetInt("gpuCount")
-		if err != nil {
-			return err
-		}
-		gpuCount = &gpuCountVal
+	ramGB, err := intFlagAlias(flags, "ramGb", "ram")
+	if err != nil {
+		return err
 	}
-
-	var cpuModel *string = nil
-	if flags.Changed("cpuModel") {
-		cpuModelVal, err := flags.GetString("cpuModel")
-		if err != nil {
-			return err
-		}
-		cpuModel = &cpuModelVal
+	diskGB, err := intFlagAlias(flags, "diskGb", "storage")
+	if err != nil {
+		return err
 	}
-
-	var vcpus *int = nil
-	if flags.Changed("vcpus") {
-		vcpusVal, err := flags.GetInt("vcpus")
-		if err != nil {
-			return err
-		}
-		vcpus = &vcpusVal
+	gpuModel, err := flags.GetString("gpuModel")
+	if err != nil {
+		return err
 	}
-
-	var ram *int = nil
-	if flags.Changed("ram") {
-		ramVal, err := flags.GetInt("ram")
-		if err != nil {
-			return err
-		}
-		ram = &ramVal
-	}
-
-	var storage *int = nil
-	if flags.Changed("storage") {
-		storageVal, err := flags.GetInt("storage")
-		if err != nil {
-			return err
-		}
-		storage = &storageVal
-	}
-
-	// based on tests, it seems that the endpoint does not
-	// support specifying only parts of the spec to modify
-	// (e.g. adjust VCPUs only) and that you need to specify
-	// the entirety of the server configuration on every call
-	req := api.ModifyServerRequest{
-		ServerId:     serverId,
-		InstanceType: instanceType,
-		VCPUs:        vcpus,
-		RAM:          ram,
-		Storage:      storage,
-	}
-
-	switch *instanceType {
-	case "cpu":
-		req.CPUModel = cpuModel
-	case "gpu":
-		req.GPUModel = gpuModel
-		req.GPUCount = gpuCount
-	default:
-		return errors.New("unknown instance type")
-	}
-
-	res, err := client.ModifyServer(req)
-
+	gpuCount, err := flags.GetInt("gpuCount")
 	if err != nil {
 		return err
 	}
 
-	if !res.Success {
-		return errors.New(res.Error)
+	if cpuCores == 0 && ramGB == 0 && diskGB == 0 && gpuModel == "" && gpuCount == 0 {
+		return errors.New("at least one resource change is required")
+	}
+	if cpuCores != 0 && cpuCores%2 != 0 {
+		return errors.New("cpuCores must be a multiple of 2")
+	}
+	if ramGB != 0 && !validModifyRAM(ramGB) {
+		return errors.New("ramGb must be one of the documented allowed values")
+	}
+	if diskGB != 0 {
+		if diskGB < 100 {
+			return errors.New("diskGb must be at least 100")
+		}
+		if diskGB < instance.Resources.StorageGB {
+			return errors.New("diskGb cannot decrease existing storage")
+		}
 	}
 
-	return nil
+	request := api.InstanceModifyRequest{
+		CPUCores: cpuCores,
+		RAMGB:    ramGB,
+		DiskGB:   diskGB,
+	}
+	if gpuModel != "" || gpuCount > 0 {
+		if gpuModel == "" || gpuCount == 0 {
+			return errors.New("both --gpuModel and --gpuCount are required when modifying GPUs")
+		}
+		request.GPUs = &struct {
+			GPUV0Name string `json:"gpuV0Name"`
+			Count     int    `json:"count"`
+		}{
+			GPUV0Name: gpuModel,
+			Count:     gpuCount,
+		}
+	}
+
+	_, err = client.ModifyInstance(args[0], request)
+	return err
 }
 
-func serverStatus(cmd *cobra.Command, args []string) error {
-	server := args[0]
-	res, err := client.GetServerStatus(server)
+func parsePortForwards(values []string) ([]api.PortForward, error) {
+	portForwards := make([]api.PortForward, 0, len(values))
+	for _, value := range values {
+		parts := strings.Split(value, ":")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid port forward %q: expected internal:external", value)
+		}
+		internalPort, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return nil, fmt.Errorf("invalid internal port %q", parts[0])
+		}
+		externalPort, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("invalid external port %q", parts[1])
+		}
+		portForwards = append(portForwards, api.PortForward{
+			InternalPort: internalPort,
+			ExternalPort: externalPort,
+		})
+	}
+	return portForwards, nil
+}
+
+func resolvedImage(flags *pflag.FlagSet) (string, error) {
+	image, err := flags.GetString("image")
 	if err != nil {
-		return err
+		return "", err
+	}
+	osValue, err := flags.GetString("os")
+	if err != nil {
+		return "", err
+	}
+	if osValue == "" {
+		return image, nil
 	}
 
-	if !res.Success {
-		return errors.New(res.Error)
+	switch strings.ToLower(osValue) {
+	case "ubuntu 24.04", "ubuntu 24.04 lts", "ubuntu2404":
+		return "ubuntu2404", nil
+	case "windows 10", "windows10":
+		return "windows10", nil
+	default:
+		return "", fmt.Errorf("unsupported --os value %q; use --image for explicit control", osValue)
+	}
+}
+
+func resolveSSHKey(flags *pflag.FlagSet) (string, error) {
+	sshKey, err := flags.GetString("sshKey")
+	if err != nil {
+		return "", err
+	}
+	secretID, err := flags.GetString("sshKeySecretId")
+	if err != nil {
+		return "", err
+	}
+	if sshKey != "" && secretID != "" {
+		return "", errors.New("--sshKey and --sshKeySecretId are mutually exclusive")
+	}
+	if secretID == "" {
+		return sshKey, nil
 	}
 
-	fmt.Println(res.Status)
+	secret, err := client.GetSecret(secretID)
+	if err != nil {
+		return "", err
+	}
+	if secret.Value == "" {
+		return "", errors.New("the selected secret did not return a usable SSH key value")
+	}
+	return secret.Value, nil
+}
 
-	return nil
+func readCloudInit(flags *pflag.FlagSet) (json.RawMessage, error) {
+	path, err := flags.GetString("cloudInitFile")
+	if err != nil {
+		return nil, err
+	}
+	if path == "" {
+		return nil, nil
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var value interface{}
+	if err := json.Unmarshal(raw, &value); err != nil {
+		if err := yaml.Unmarshal(raw, &value); err != nil {
+			return nil, errors.New("cloudInitFile must contain valid JSON or YAML")
+		}
+	}
+
+	normalized, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(normalized), nil
+}
+
+func intFlagAlias(flags *pflag.FlagSet, primary string, alias string) (int, error) {
+	if flags.Changed(primary) {
+		return flags.GetInt(primary)
+	}
+	if flags.Changed(alias) {
+		return flags.GetInt(alias)
+	}
+	return 0, nil
+}
+
+func validModifyRAM(value int) bool {
+	allowed := map[int]bool{
+		2: true, 4: true, 6: true, 8: true, 10: true, 16: true, 32: true, 48: true,
+		64: true, 80: true, 96: true, 112: true, 128: true, 144: true, 160: true,
+		176: true, 192: true, 208: true, 224: true, 240: true, 256: true, 512: true,
+	}
+	return allowed[value]
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

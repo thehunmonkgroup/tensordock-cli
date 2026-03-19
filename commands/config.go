@@ -1,7 +1,11 @@
 package commands
 
 import (
+	"bufio"
+	"fmt"
 	"log"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -10,23 +14,45 @@ import (
 var (
 	configCmd = &cobra.Command{
 		Use:   "config",
-		Short: "Set API token/key",
+		Short: "Set API token configuration",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			apiKey, err := cmd.Flags().GetString("apiKey")
-			if err != nil {
-				return err
-			}
-
 			apiToken, err := cmd.Flags().GetString("apiToken")
 			if err != nil {
 				return err
 			}
 
-			viper.Set("apiKey", apiKey)
-			viper.Set("apiToken", apiToken)
-			viper.WriteConfig()
+			apiTokenEnvVar, err := cmd.Flags().GetString("apiTokenEnvVar")
+			if err != nil {
+				return err
+			}
 
-			return nil
+			serviceURL, err := cmd.Flags().GetString("serviceUrl")
+			if err != nil {
+				return err
+			}
+
+			if apiToken == "" && apiTokenEnvVar == "" {
+				return fmt.Errorf("either --apiToken or --apiTokenEnvVar must be provided")
+			}
+
+			if apiToken != "" {
+				if err := confirmAuthReplacement("apiTokenEnvVar"); err != nil {
+					return err
+				}
+				viper.Set("apiToken", apiToken)
+				viper.Set("apiTokenEnvVar", nil)
+			}
+
+			if apiTokenEnvVar != "" {
+				if err := confirmAuthReplacement("apiToken"); err != nil {
+					return err
+				}
+				viper.Set("apiTokenEnvVar", apiTokenEnvVar)
+				viper.Set("apiToken", nil)
+			}
+
+			viper.Set("serviceUrl", serviceURL)
+			return viper.WriteConfig()
 		},
 		PostRun: func(cmd *cobra.Command, args []string) {
 			log.Print("config updated")
@@ -35,10 +61,39 @@ var (
 )
 
 func init() {
-	configCmd.Flags().String("apiKey", "", "API Key")
-	configCmd.MarkFlagRequired("apiKey")
-	configCmd.Flags().String("apiToken", "", "API Token")
-	configCmd.MarkFlagRequired("apiToken")
-	configCmd.Flags().String("serviceUrl", "https://console.tensordock.com/api", "Service URL")
+	configCmd.Flags().String("apiToken", "", "API token")
+	configCmd.Flags().String("apiTokenEnvVar", "", "Environment variable containing the API token")
+	configCmd.Flags().String("serviceUrl", "https://dashboard.tensordock.com/api/v2", "Service URL")
+	configCmd.MarkFlagsMutuallyExclusive("apiToken", "apiTokenEnvVar")
 	rootCmd.AddCommand(configCmd)
+}
+
+func confirmAuthReplacement(conflictingKey string) error {
+	existingValue := viper.GetString(conflictingKey)
+	if existingValue == "" {
+		return nil
+	}
+
+	stat, err := os.Stdin.Stat()
+	if err != nil {
+		return err
+	}
+	if stat.Mode()&os.ModeCharDevice == 0 {
+		return fmt.Errorf("refusing to replace existing %s config without interactive confirmation", conflictingKey)
+	}
+
+	fmt.Printf("warning: existing %s configuration is set and will be replaced. Continue? [y/N]: ", conflictingKey)
+
+	reader := bufio.NewReader(os.Stdin)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		return err
+	}
+
+	switch strings.ToLower(strings.TrimSpace(response)) {
+	case "y", "yes":
+		return nil
+	default:
+		return fmt.Errorf("aborted without changing config")
+	}
 }

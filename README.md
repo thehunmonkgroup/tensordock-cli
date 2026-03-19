@@ -1,145 +1,154 @@
 # tensordock-cli
 
-A CLI client for [TensorDock](https://tensordock.com)
+A CLI client for the TensorDock v2 API.
 
 ## Installation
 
-Install using `go install github.com/caguiclajmg/tensordock-cli` or grab a build from [Releases](https://github.com/caguiclajmg/tensordock-cli/releases)
+Install with `go install github.com/caguiclajmg/tensordock-cli` or build locally with:
 
-## Build
-
-```
+```sh
 go build
 ```
 
-## Usage
+## Configuration
 
-Add `--help` to any command to get contextual help
+Store your TensorDock API token:
 
-### Configuration
-
-```
-tensordock-cli config --apiKey api_key --apiToken api_token [--serviceUrl service_url]
+```sh
+tensordock-cli config --apiToken your_token
 ```
 
-Go to https://console.tensordock.com/api to get your API key and token
+Or store the environment variable name that should be read at runtime:
 
-Credentials may also be specified inline with every command using the `--apiKey` and `--apiToken` flags
+```sh
+tensordock-cli config --apiTokenEnvVar TENSORDOCK_API_TOKEN
+```
 
-### List servers
+The default API base URL is `https://dashboard.tensordock.com/api/v2`.
+
+You can also pass `--apiToken` or `--apiTokenEnvVar` on individual commands.
+
+If you switch between stored auth types, the CLI warns and asks for confirmation before replacing the existing config entry.
+
+## Supported Commands
+
+### List instances
 
 ```sh
 tensordock-cli servers list
 ```
 
-### Get server info
+### Get instance info
 
 ```sh
-tensordock-cli servers info server_id
+tensordock-cli servers info instance_id
 ```
 
-### Query server status from hypervisor
+### Start / stop / delete an instance
 
 ```sh
-tensordock-cli servers status server_id
+tensordock-cli servers start instance_id
+tensordock-cli servers stop instance_id
+tensordock-cli servers delete instance_id
 ```
 
-### Start/Stop/Restart server
+### Create an instance
+
+Location-based deployment:
 
 ```sh
-tensordock-cli servers start|stop|restart server_id
+tensordock-cli servers deploy my-instance \
+  --locationId loc-uuid \
+  --image ubuntu2404 \
+  --gpuModel geforcertx4090-pcie-24gb \
+  --gpuCount 1 \
+  --vcpus 4 \
+  --ram 8 \
+  --storage 100 \
+  --sshKey "$(cat ~/.ssh/id_ed25519.pub)"
 ```
 
-### Delete server
+Hostnode-based deployment:
 
 ```sh
-tensordock-cli servers delete server_id
+tensordock-cli servers deploy my-instance \
+  --hostnodeId hostnode-uuid \
+  --image ubuntu2404 \
+  --gpuModel geforcertx4090-pcie-24gb \
+  --gpuCount 1 \
+  --vcpus 4 \
+  --ram 8 \
+  --storage 100 \
+  --sshKeySecretId secret-uuid \
+  --portForward 22:30022
 ```
 
-### Open management dashboard in browser
+Additional deploy options:
+
+- `--dedicatedIp`
+- `--cloudInitFile path/to/cloud-init.yaml`
+- compatibility alias `--os` for simple image mapping
+
+Legacy positional `admin_user` and `admin_pass` arguments are accepted for compatibility but ignored by the v2 API.
+
+### Modify an instance
 
 ```sh
-tensordock-cli servers manage server_id
+tensordock-cli servers modify instance_id \
+  --cpuCores 8 \
+  --ramGb 32 \
+  --diskGb 200 \
+  --gpuModel geforcertx4090-pcie-24gb \
+  --gpuCount 1
 ```
 
-### Launch an SSH session with a server
+Compatibility aliases remain available:
+
+- `--vcpus` for `--cpuCores`
+- `--ram` for `--ramGb`
+- `--storage` for `--diskGb`
+
+### Open an SSH session
 
 ```sh
-tensordock-cli servers ssh server_id
+tensordock-cli servers ssh instance_id
 ```
 
-### Deploy a server
+### Manage command compatibility placeholder
 
 ```sh
-tensordock-cli servers deploy \
-    [--location location \]
-    [--instanceType instance_type \]
-    [--gpuModel gpu_model \]
-    [--gpuCount gpu_count \]
-    [--cpuModel cpu_model \]
-    [--vcpus vcpus \]
-    [--storage storage \]
-    [--storageClass storage_class \]
-    [--ram ram \]
-    [--os os \]
-    name \
-    admin_user \
-    admin_pass
+tensordock-cli servers manage instance_id
 ```
 
-**Tip:** try `tensordock-cli stock list [--type cpu]` to find out available values for `gpu_model`, `location` and `cpu_model` 
+`servers manage` is retained for compatibility, but the reviewed v2 API docs do not document a dashboard URL for direct browser launching yet.
 
-#### Deploy a GPU Server
+### Secrets
 
 ```sh
-tensordock-cli servers deploy server_name admin_user admin_pass --gpuCount 2 --gpuModel A4000
+tensordock-cli secrets list
+tensordock-cli secrets get secret_id
+tensordock-cli secrets create --name my-key --type SSHKEY --value "ssh-ed25519 AAAA..."
+tensordock-cli secrets delete secret_id
 ```
 
-#### Deploy a CPU-only Server
+### Locations
 
 ```sh
-tensordock-cli servers deploy server_name admin_user admin_pass --instanceType cpu --cpuModel Intel_Xeon_V4
+tensordock-cli locations list
 ```
 
-#### Modify a server
+### Hostnodes
 
 ```sh
-tensordock-cli servers modify server_id \
-    --instanceType instance_type \
-    --gpuModel gpu_mdoel \
-    --gpuCount gpu_count \
-    --cpuModel cpu_model \
-    --storage storage \
-    --vcpus vcpus \
-    --ram ram
+tensordock-cli hostnodes list --location loc-uuid --gpu geforcertx4090-pcie-24gb
+tensordock-cli hostnodes info hostnode-uuid
 ```
 
-#### Convert a server to a CPU instance
+## Removed Legacy Commands
 
-```sh
-tensordock-cli servers modify server_id --instanceType cpu --cpuModel Intel_Xeon_V4 --storage 20 --vcpus 2 --ram 4
-```
+These commands were removed because they depended on legacy endpoints that are not covered by the reviewed v2 API docs:
 
-#### Convert a server to a GPU instance
-
-```sh
-tensordock-cli servers modify server_id --instanceType gpu --gpuModel Quadro_4000 --gpuCount 2 --storage 20 --vcpus 2 --ram 4
-```
-
-### Get billing info
-
-```sh
-tensordock-cli billing
-```
-
-### Get GPU stock
-
-```sh
-tensordock-cli stock list
-```
-
-### Get CPU stock
-
-```sh
-tensordock-cli stock list --type cpu
-```
+- `servers restart`
+- `servers status`
+- `billing`
+- `stock list`

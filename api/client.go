@@ -4,117 +4,68 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"reflect"
-	"strconv"
+	"path"
 	"strings"
-
-	"github.com/mitchellh/mapstructure"
 )
 
-var CLIENT_VERSION = "0.7.1"
-
-type Response struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error"`
-}
-
-type GetServerResponse struct {
-	Response
-	Server Server `json:"server"`
-}
-
-type GetServerStatusResponse struct {
-	Response
-	Status string `json:"status"`
-}
-
-type ListServersResponse struct {
-	Response
-	Servers map[string]Server `json:"servers"`
-}
-
-type GetBillingDetailsResponse struct {
-	Response
-	BillingDetails
-}
-
-type DeployServerRequest struct {
-	AdminUser    string `mapstructure:"admin_user"`
-	AdminPass    string `mapstructure:"admin_pass"`
-	InstanceType string `mapstructure:"instance_type"`
-	GPUModel     string `mapstructure:"gpu_model,omitempty"`
-	GPUCount     int    `mapstructure:"gpu_count,omitempty"`
-	CPUModel     string `mapstructure:"cpu_model,omitempty"`
-	VCPUs        int    `mapstructure:"vcpus"`
-	RAM          int    `mapstructure:"ram"`
-	Storage      int    `mapstructure:"storage"`
-	StorageClass string `mapstructure:"storage_class"`
-	OS           string `mapstructure:"os"`
-	Location     string `mapstructure:"location"`
-	Name         string `mapstructure:"name"`
-}
-
-type ModifyServerRequest struct {
-	ServerId     string  `mapstructure:"server_id"`
-	InstanceType *string `mapstructure:"instance_type"`
-	GPUModel     *string `mapstructure:"gpu_model,omitempty"`
-	GPUCount     *int    `mapstructure:"gpu_count,omitempty"`
-	CPUModel     *string `mapstructure:"cpu_model,omitempty"`
-	VCPUs        *int    `mapstructure:"vcpus"`
-	RAM          *int    `mapstructure:"ram"`
-	Storage      *int    `mapstructure:"storage"`
-}
-
-type DeployServerResponse struct {
-	Response
-	Server struct {
-		Id    string              `json:"id"`
-		Ip    string              `json:"ip"`
-		Links []map[string]string `json:"links"`
-	} `json:"server"`
-}
-
-type ListGpuStockResponse struct {
-	Response
-	Stock map[string]map[string]struct {
-		AvailableNow     int `json:"available_now"`
-		AvailableReserve int `json:"available_reserve"`
-	} `json:"stock"`
-}
-
-type ListCpuStockResponse struct {
-	Response
-	Stock map[string]map[string]struct {
-		AvailableNow string `json:"available_now"`
-	} `json:"stock"`
-}
+var CLIENT_VERSION = "0.8.0"
 
 type Client struct {
-	BaseUrl  string
-	ApiKey   string
-	ApiToken string
-	Debug    bool
+	BaseURL    string
+	APIToken   string
+	Debug      bool
+	HTTPClient *http.Client
 }
 
-func (client *Client) do(method string, path string, params map[string]string, headers map[string]string, body []byte) (*json.RawMessage, error) {
-	query := url.Values{}
-	for key, elem := range params {
-		query.Add(key, elem)
+func NewClient(baseURL string, apiToken string, debug bool) *Client {
+	return &Client{
+		BaseURL:    strings.TrimRight(baseURL, "/"),
+		APIToken:   apiToken,
+		Debug:      debug,
+		HTTPClient: http.DefaultClient,
+	}
+}
+
+func (client *Client) request(method string, endpoint string, query map[string]string, body interface{}, out interface{}) error {
+	var requestBody io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		requestBody = bytes.NewReader(raw)
 	}
 
-	url := fmt.Sprintf("%v/%v?%v", client.BaseUrl, path, query.Encode())
-	req, err := http.NewRequest(method, url, bytes.NewBuffer(body))
+	baseURL, err := url.Parse(client.BaseURL)
 	if err != nil {
-		return nil, err
+		return err
+	}
+	baseURL.Path = path.Join(baseURL.Path, endpoint)
+
+	values := baseURL.Query()
+	for key, value := range query {
+		if value == "" {
+			continue
+		}
+		values.Set(key, value)
+	}
+	baseURL.RawQuery = values.Encode()
+
+	req, err := http.NewRequest(method, baseURL.String(), requestBody)
+	if err != nil {
+		return err
 	}
 
-	for key, elem := range headers {
-		req.Header.Add(key, elem)
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", client.APIToken))
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", fmt.Sprintf("tensordock-cli/%s", CLIENT_VERSION))
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 
 	if client.Debug {
@@ -125,9 +76,14 @@ func (client *Client) do(method string, path string, params map[string]string, h
 		fmt.Println(string(reqDump))
 	}
 
-	res, err := http.DefaultClient.Do(req)
+	httpClient := client.HTTPClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+
+	res, err := httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer res.Body.Close()
 
@@ -139,296 +95,202 @@ func (client *Client) do(method string, path string, params map[string]string, h
 		fmt.Println(string(resDump))
 	}
 
-	bytes, _ := ioutil.ReadAll(res.Body)
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err
+	}
 
-	// HACK: Workaround for API issue which causes endpoint to
-	// return an HTML Page with a 200 Status code
-	if strings.HasPrefix(res.Header.Get("Content-Type"), "text/html") {
-		bytes, err := json.Marshal(Response{Success: false, Error: "api call failed"})
-		if err != nil {
-			return nil, err
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		if len(raw) == 0 {
+			return fmt.Errorf("api request failed with status %s", res.Status)
 		}
-		msg := json.RawMessage(bytes)
-		return &msg, nil
+		return fmt.Errorf("api request failed with status %s: %s", res.Status, strings.TrimSpace(string(raw)))
 	}
 
-	var raw map[string]interface{}
-	err = json.Unmarshal(bytes, &raw)
-	if err != nil {
-		return nil, err
+	if out == nil || len(raw) == 0 {
+		return nil
 	}
 
-	// HACK: Some endpoints return a string boolean on the `success`` field
-	if val, ok := raw["success"]; ok {
-		if reflect.ValueOf(val).Kind() == reflect.String {
-			success, err := strconv.ParseBool(val.(string))
-			if err != nil {
-				success = false
-			}
-			raw["success"] = success
-		}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return fmt.Errorf("decode response: %w", err)
 	}
 
-	// HACK: on some endpoints, the success key is only
-	// present on OK response codes, if the response code
-	// is good then just assume the value is true
-	if _, ok := raw["success"]; !ok {
-		if res.StatusCode >= 200 && res.StatusCode <= 300 {
-			raw["success"] = true
-		}
-	}
-
-	bytes, err = json.Marshal(raw)
-	if err != nil {
-		return nil, err
-	}
-
-	msg := json.RawMessage(bytes)
-	return &msg, nil
+	return nil
 }
 
-func (client *Client) get(path string, params map[string]string, auth bool) (*json.RawMessage, error) {
-	newParams := map[string]string{}
-
-	if auth {
-		newParams["api_key"] = client.ApiKey
-		newParams["api_token"] = client.ApiToken
+func (client *Client) ListSecrets() ([]SecretSummary, error) {
+	var response struct {
+		Data struct {
+			Secrets []SecretSummary `json:"secrets"`
+		} `json:"data"`
 	}
 
-	for key, elem := range params {
-		newParams[key] = elem
+	if err := client.request(http.MethodGet, "secrets", nil, nil, &response); err != nil {
+		return nil, err
 	}
 
-	headers := map[string]string{}
-	headers["User-Agent"] = fmt.Sprintf("tensordock-cli/%v", CLIENT_VERSION)
-
-	return client.do(http.MethodGet, path, newParams, headers, nil)
+	return response.Data.Secrets, nil
 }
 
-func (client *Client) post(path string, body map[string]string, auth bool) (*json.RawMessage, error) {
-	newBody := url.Values{}
-
-	if auth {
-		newBody.Add("api_key", client.ApiKey)
-		newBody.Add("api_token", client.ApiToken)
+func (client *Client) CreateSecret(request SecretCreateRequest) (*Secret, error) {
+	var response struct {
+		Data Secret `json:"data"`
 	}
 
-	for key, elem := range body {
-		newBody.Add(key, elem)
+	if err := client.request(http.MethodPost, "secrets", nil, request, &response); err != nil {
+		return nil, err
 	}
 
-	headers := map[string]string{}
-	headers["User-Agent"] = fmt.Sprintf("tensordock-cli/%v", CLIENT_VERSION)
-	headers["Content-Type"] = "application/x-www-form-urlencoded"
-
-	return client.do(
-		http.MethodPost,
-		path,
-		nil,
-		headers,
-		[]byte(newBody.Encode()),
-	)
+	return &response.Data, nil
 }
 
-func (client *Client) ListServers() (*ListServersResponse, error) {
-	raw, err := client.get("list", nil, true)
-	if err != nil {
+func (client *Client) GetSecret(id string) (*Secret, error) {
+	var response struct {
+		Data Secret `json:"data"`
+	}
+
+	if err := client.request(http.MethodGet, fmt.Sprintf("secrets/%s", id), nil, nil, &response); err != nil {
 		return nil, err
 	}
 
-	var res ListServersResponse
-	if err := json.Unmarshal(*raw, &res); err != nil {
-		return nil, err
-	}
-
-	return &res, nil
+	return &response.Data, nil
 }
 
-func (client *Client) StopServer(server string) (*Response, error) {
-	raw, err := client.get("stop/single", map[string]string{"server": server}, true)
-	if err != nil {
+func (client *Client) DeleteSecret(id string) (*MessageResponse, error) {
+	var response MessageResponse
+
+	if err := client.request(http.MethodDelete, fmt.Sprintf("secrets/%s", id), nil, nil, &response); err != nil {
 		return nil, err
 	}
 
-	var res Response
-	if err := json.Unmarshal(*raw, &res); err != nil {
-		return nil, err
-	}
-
-	return &res, nil
+	return &response, nil
 }
 
-func (client *Client) StartServer(server string) (*Response, error) {
-	raw, err := client.get("start/single", map[string]string{"server": server}, true)
-	if err != nil {
+func (client *Client) ListLocations() ([]Location, error) {
+	var response struct {
+		Data struct {
+			Locations []Location `json:"locations"`
+		} `json:"data"`
+	}
+
+	if err := client.request(http.MethodGet, "locations", nil, nil, &response); err != nil {
 		return nil, err
 	}
 
-	var res Response
-	if err := json.Unmarshal(*raw, &res); err != nil {
-		return nil, err
-	}
-
-	return &res, nil
+	return response.Data.Locations, nil
 }
 
-func (client *Client) DeleteServer(server string) (*Response, error) {
-	raw, err := client.get("delete/single", map[string]string{"server": server}, true)
-	if err != nil {
+func (client *Client) ListHostnodes(filters map[string]string) ([]Hostnode, error) {
+	var response struct {
+		Data struct {
+			Hostnodes []Hostnode `json:"hostnodes"`
+		} `json:"data"`
+	}
+
+	if err := client.request(http.MethodGet, "hostnodes", filters, nil, &response); err != nil {
 		return nil, err
 	}
 
-	var res Response
-	if err := json.Unmarshal(*raw, &res); err != nil {
-		return nil, err
-	}
-
-	return &res, nil
+	return response.Data.Hostnodes, nil
 }
 
-func (client *Client) GetServer(server string) (*GetServerResponse, error) {
-	raw, err := client.get("get/single", map[string]string{"server": server}, true)
-	if err != nil {
+func (client *Client) GetHostnode(id string) (*Hostnode, error) {
+	var response struct {
+		Data Hostnode `json:"data"`
+	}
+
+	if err := client.request(http.MethodGet, fmt.Sprintf("hostnodes/%s", id), nil, nil, &response); err != nil {
 		return nil, err
 	}
 
-	var res GetServerResponse
-	if err := json.Unmarshal(*raw, &res); err != nil {
-		return nil, err
-	}
-
-	return &res, nil
+	return &response.Data, nil
 }
 
-func (client *Client) DeployServer(req DeployServerRequest) (*DeployServerResponse, error) {
-	var rawBody map[string]interface{}
-	err := mapstructure.Decode(req, &rawBody)
-	if err != nil {
+func (client *Client) ListInstances() ([]InstanceListItem, error) {
+	var response struct {
+		Data struct {
+			Instances  []InstanceListItem `json:"instances"`
+			Attributes struct {
+				Instances []InstanceListItem `json:"instances"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+
+	if err := client.request(http.MethodGet, "instances", nil, nil, &response); err != nil {
 		return nil, err
 	}
 
-	body := map[string]string{}
-	for key, elem := range rawBody {
-		str := fmt.Sprintf("%v", elem)
-		body[key] = str
+	if len(response.Data.Instances) > 0 {
+		return response.Data.Instances, nil
 	}
 
-	raw, err := client.post("deploy/single/custom", body, true)
-	if err != nil {
-		return nil, err
-	}
-
-	var res DeployServerResponse
-	if err := json.Unmarshal(*raw, &res); err != nil {
-		return nil, err
-	}
-
-	return &res, nil
+	return response.Data.Attributes.Instances, nil
 }
 
-func (client *Client) GetBillingDetails() (*GetBillingDetailsResponse, error) {
-	raw, err := client.get("billing", nil, true)
-	if err != nil {
+func (client *Client) GetInstance(id string) (*Instance, error) {
+	var wrapped struct {
+		Data Instance `json:"data"`
+	}
+	if err := client.request(http.MethodGet, fmt.Sprintf("instances/%s", id), nil, nil, &wrapped); err == nil && wrapped.Data.ID != "" {
+		return &wrapped.Data, nil
+	}
+
+	var direct Instance
+	if err := client.request(http.MethodGet, fmt.Sprintf("instances/%s", id), nil, nil, &direct); err != nil {
 		return nil, err
 	}
 
-	var res GetBillingDetailsResponse
-	if err := json.Unmarshal(*raw, &res); err != nil {
-		return nil, err
-	}
-
-	return &res, nil
+	return &direct, nil
 }
 
-func NewClient(baseUrl string, apiKey string, apiToken string, debug bool) *Client {
-	return &Client{baseUrl, apiKey, apiToken, debug}
+func (client *Client) CreateInstance(request InstanceCreateRequest) (*InstanceCreateResponse, error) {
+	var response struct {
+		Data InstanceCreateResponse `json:"data"`
+	}
+
+	if err := client.request(http.MethodPost, "instances", nil, request, &response); err != nil {
+		return nil, err
+	}
+
+	return &response.Data, nil
 }
 
-func (client *Client) RestartServer(server string) (*Response, error) {
-	raw, err := client.get("restart/single", map[string]string{"server": server}, true)
-	if err != nil {
+func (client *Client) StartInstance(id string) (*ActionStatusResponse, error) {
+	var response ActionStatusResponse
+
+	if err := client.request(http.MethodPost, fmt.Sprintf("instances/%s/start", id), nil, nil, &response); err != nil {
 		return nil, err
 	}
 
-	var res Response
-	if err := json.Unmarshal(*raw, &res); err != nil {
-		return nil, err
-	}
-
-	return &res, nil
+	return &response, nil
 }
 
-func (client *Client) ListGpuStock() (*ListGpuStockResponse, error) {
-	raw, err := client.get("stock/list", nil, false)
-	if err != nil {
+func (client *Client) StopInstance(id string) (*ActionStatusResponse, error) {
+	var response ActionStatusResponse
+
+	if err := client.request(http.MethodPost, fmt.Sprintf("instances/%s/stop", id), nil, nil, &response); err != nil {
 		return nil, err
 	}
 
-	var res ListGpuStockResponse
-	if err := json.Unmarshal(*raw, &res); err != nil {
-		return nil, err
-	}
-
-	return &res, nil
+	return &response, nil
 }
 
-func (client *Client) ListCpuStock() (*ListCpuStockResponse, error) {
-	raw, err := client.get("stock/cpu/list", nil, false)
-	if err != nil {
+func (client *Client) DeleteInstance(id string) (*MessageResponse, error) {
+	var response MessageResponse
+
+	if err := client.request(http.MethodDelete, fmt.Sprintf("instances/%s", id), nil, nil, &response); err != nil {
 		return nil, err
 	}
 
-	var res ListCpuStockResponse
-	if err := json.Unmarshal(*raw, &res); err != nil {
-		return nil, err
-	}
-
-	return &res, nil
+	return &response, nil
 }
 
-func (client *Client) ModifyServer(req ModifyServerRequest) (*Response, error) {
-	var rawBody map[string]interface{}
-	err := mapstructure.Decode(req, &rawBody)
-	if err != nil {
+func (client *Client) ModifyInstance(id string, request InstanceModifyRequest) (*MessageResponse, error) {
+	var response MessageResponse
+
+	if err := client.request(http.MethodPut, fmt.Sprintf("instances/%s/modify", id), nil, request, &response); err != nil {
 		return nil, err
 	}
 
-	// convert to map[string]string skipping nil pointers
-	body := map[string]string{}
-	for key, elem := range rawBody {
-		val := reflect.ValueOf(elem)
-		if val.Kind() == reflect.Ptr {
-			if val.IsNil() {
-				continue
-			}
-			val = val.Elem()
-		}
-		body[key] = fmt.Sprintf("%v", val)
-	}
-
-	raw, err := client.post("modify/single/custom", body, true)
-	if err != nil {
-		return nil, err
-	}
-
-	var res Response
-	if err := json.Unmarshal(*raw, &res); err != nil {
-		return nil, err
-	}
-
-	return &res, nil
-}
-
-func (client *Client) GetServerStatus(server string) (*GetServerStatusResponse, error) {
-	raw, err := client.post("deploy/status", map[string]string{"server": server}, true)
-	if err != nil {
-		return nil, err
-	}
-
-	var res GetServerStatusResponse
-	if err := json.Unmarshal(*raw, &res); err != nil {
-		return nil, err
-	}
-
-	return &res, nil
+	return &response, nil
 }
