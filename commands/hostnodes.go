@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/caguiclajmg/tensordock-cli/debugutil"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 )
@@ -50,11 +51,13 @@ func listHostnodes(cmd *cobra.Command, args []string) error {
 			filters[key] = value
 		}
 	}
+	commandDebugf("listing hostnodes filters=%s", debugutil.FormatStringMap(filters))
 
 	hostnodes, err := client.ListHostnodes(filters)
 	if err != nil {
 		return err
 	}
+	commandDebugf("listing hostnodes result_count=%d", len(hostnodes))
 
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
@@ -81,6 +84,7 @@ func listHostnodes(cmd *cobra.Command, args []string) error {
 }
 
 func getHostnode(cmd *cobra.Command, args []string) error {
+	commandDebugf("fetching hostnode id=%s", args[0])
 	hostnode, err := client.GetHostnode(args[0])
 	if err != nil {
 		return err

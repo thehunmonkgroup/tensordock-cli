@@ -56,10 +56,12 @@ func init() {
 }
 
 func listSecrets(cmd *cobra.Command, args []string) error {
+	commandDebugf("listing secrets")
 	secrets, err := client.ListSecrets()
 	if err != nil {
 		return err
 	}
+	commandDebugf("listing secrets result_count=%d", len(secrets))
 
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
@@ -73,6 +75,7 @@ func listSecrets(cmd *cobra.Command, args []string) error {
 }
 
 func getSecret(cmd *cobra.Command, args []string) error {
+	commandDebugf("fetching secret id=%s", args[0])
 	secret, err := client.GetSecret(args[0])
 	if err != nil {
 		return err
@@ -101,6 +104,7 @@ func createSecret(cmd *cobra.Command, args []string) error {
 	if secretType == "" {
 		return errors.New("secret type is required")
 	}
+	commandDebugf("creating secret name=%q type=%q value_set=%t", name, secretType, value != "")
 
 	request := api.SecretCreateRequest{}
 	request.Data.Type = "secret"
@@ -120,6 +124,7 @@ func createSecret(cmd *cobra.Command, args []string) error {
 }
 
 func deleteSecret(cmd *cobra.Command, args []string) error {
+	commandDebugf("deleting secret id=%s", args[0])
 	_, err := client.DeleteSecret(args[0])
 	return err
 }

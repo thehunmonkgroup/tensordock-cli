@@ -30,6 +30,12 @@ var (
 			if err != nil {
 				return err
 			}
+			authSource, err := describeAPITokenSource(cmd)
+			if err != nil {
+				return err
+			}
+
+			commandDebugf("initializing client service_url=%s auth_source=%s", serviceURL, authSource)
 
 			client = api.NewClient(serviceURL, apiToken, debug)
 			return nil
@@ -70,13 +76,18 @@ func initConfig() {
 	}
 
 	viper.SetDefault("serviceUrl", "https://dashboard.tensordock.com/api/v2")
+	commandDebugf("config path selected file=%s", viper.ConfigFileUsed())
 
 	err := viper.ReadInConfig()
 	if err != nil {
 		log.Printf("warning: config file %v not found", viper.ConfigFileUsed())
+		commandDebugf("config file missing file=%s err=%v", viper.ConfigFileUsed(), err)
+	} else {
+		commandDebugf("config file loaded file=%s", viper.ConfigFileUsed())
 	}
 
 	viper.AutomaticEnv()
+	commandDebugf("automatic environment resolution enabled")
 }
 
 func resolveAPIToken(cmd *cobra.Command) (string, error) {
@@ -117,10 +128,13 @@ func readTokenFromEnvVar(name string) (string, error) {
 		return "", fmt.Errorf("api token environment variable name cannot be empty")
 	}
 
+	commandDebugf("reading API token from environment variable name=%s", name)
 	value, ok := os.LookupEnv(name)
 	if !ok || value == "" {
+		commandDebugf("API token environment variable missing or empty name=%s", name)
 		return "", fmt.Errorf("environment variable %q is not set or is empty", name)
 	}
 
+	commandDebugf("API token environment variable resolved name=%s", name)
 	return value, nil
 }

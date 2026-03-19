@@ -27,10 +27,12 @@ func init() {
 }
 
 func listLocations(cmd *cobra.Command, args []string) error {
+	commandDebugf("listing locations")
 	locations, err := client.ListLocations()
 	if err != nil {
 		return err
 	}
+	commandDebugf("listing locations result_count=%d", len(locations))
 
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)

@@ -35,6 +35,8 @@ var (
 				return fmt.Errorf("either --apiToken or --apiTokenEnvVar must be provided")
 			}
 
+			commandDebugf("config update requested service_url=%s api_token_set=%t api_token_env_var=%q", serviceURL, apiToken != "", apiTokenEnvVar)
+
 			if apiToken != "" {
 				if err := confirmAuthReplacement("apiTokenEnvVar"); err != nil {
 					return err
@@ -52,6 +54,7 @@ var (
 			}
 
 			viper.Set("serviceUrl", serviceURL)
+			commandDebugf("writing config file=%s", viper.ConfigFileUsed())
 			return viper.WriteConfig()
 		},
 		PostRun: func(cmd *cobra.Command, args []string) {
@@ -71,6 +74,7 @@ func init() {
 func confirmAuthReplacement(conflictingKey string) error {
 	existingValue := viper.GetString(conflictingKey)
 	if existingValue == "" {
+		commandDebugf("config replacement check skipped key=%s", conflictingKey)
 		return nil
 	}
 
@@ -79,6 +83,7 @@ func confirmAuthReplacement(conflictingKey string) error {
 		return err
 	}
 	if stat.Mode()&os.ModeCharDevice == 0 {
+		commandDebugf("config replacement denied due to non-interactive stdin key=%s", conflictingKey)
 		return fmt.Errorf("refusing to replace existing %s config without interactive confirmation", conflictingKey)
 	}
 
@@ -92,8 +97,10 @@ func confirmAuthReplacement(conflictingKey string) error {
 
 	switch strings.ToLower(strings.TrimSpace(response)) {
 	case "y", "yes":
+		commandDebugf("config replacement confirmed key=%s", conflictingKey)
 		return nil
 	default:
+		commandDebugf("config replacement declined key=%s", conflictingKey)
 		return fmt.Errorf("aborted without changing config")
 	}
 }

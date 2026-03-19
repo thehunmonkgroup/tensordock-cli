@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"path"
 	"strings"
+	"time"
+
+	"github.com/caguiclajmg/tensordock-cli/debugutil"
 )
 
 var CLIENT_VERSION = "0.8.0"
@@ -33,16 +34,20 @@ func NewClient(baseURL string, apiToken string, debug bool) *Client {
 
 func (client *Client) request(method string, endpoint string, query map[string]string, body interface{}, out interface{}) error {
 	var requestBody io.Reader
+	var bodyBytes []byte
 	if body != nil {
 		raw, err := json.Marshal(body)
 		if err != nil {
+			debugutil.Logf(client.Debug, "request marshal failed method=%s endpoint=%s err=%v", method, endpoint, err)
 			return err
 		}
+		bodyBytes = raw
 		requestBody = bytes.NewReader(raw)
 	}
 
 	baseURL, err := url.Parse(client.BaseURL)
 	if err != nil {
+		debugutil.Logf(client.Debug, "invalid base URL %q: %v", client.BaseURL, err)
 		return err
 	}
 	baseURL.Path = path.Join(baseURL.Path, endpoint)
@@ -58,6 +63,7 @@ func (client *Client) request(method string, endpoint string, query map[string]s
 
 	req, err := http.NewRequest(method, baseURL.String(), requestBody)
 	if err != nil {
+		debugutil.Logf(client.Debug, "request creation failed method=%s url=%s err=%v", method, debugutil.RedactURL(baseURL.String()), err)
 		return err
 	}
 
@@ -68,39 +74,40 @@ func (client *Client) request(method string, endpoint string, query map[string]s
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	if client.Debug {
-		reqDump, err := httputil.DumpRequestOut(req, true)
-		if err != nil {
-			log.Fatalf("error: %v", err)
-		}
-		fmt.Println(string(reqDump))
-	}
+	debugutil.Logf(
+		client.Debug,
+		"api request method=%s endpoint=%s url=%s query=%s body_bytes=%d body=%s",
+		method,
+		endpoint,
+		debugutil.RedactURL(req.URL.String()),
+		debugutil.FormatStringMap(query),
+		len(bodyBytes),
+		debugutil.RedactJSONBytes(bodyBytes),
+	)
 
 	httpClient := client.HTTPClient
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
 
+	startedAt := time.Now()
 	res, err := httpClient.Do(req)
 	if err != nil {
+		debugutil.Logf(client.Debug, "api transport error method=%s endpoint=%s url=%s duration=%s err=%v", method, endpoint, debugutil.RedactURL(req.URL.String()), time.Since(startedAt), err)
 		return err
 	}
 	defer res.Body.Close()
 
-	if client.Debug {
-		resDump, err := httputil.DumpResponse(res, true)
-		if err != nil {
-			log.Fatalf("error: %v", err)
-		}
-		fmt.Println(string(resDump))
-	}
-
 	raw, err := io.ReadAll(res.Body)
 	if err != nil {
+		debugutil.Logf(client.Debug, "api response read failed method=%s endpoint=%s status=%s duration=%s err=%v", method, endpoint, res.Status, time.Since(startedAt), err)
 		return err
 	}
 
+	debugutil.Logf(client.Debug, "api response method=%s endpoint=%s status=%s duration=%s response_bytes=%d body=%s", method, endpoint, res.Status, time.Since(startedAt), len(raw), debugutil.RedactJSONBytes(raw))
+
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		debugutil.Logf(client.Debug, "api non-success status method=%s endpoint=%s status=%s", method, endpoint, res.Status)
 		if len(raw) == 0 {
 			return fmt.Errorf("api request failed with status %s", res.Status)
 		}
@@ -112,6 +119,7 @@ func (client *Client) request(method string, endpoint string, query map[string]s
 	}
 
 	if err := json.Unmarshal(raw, out); err != nil {
+		debugutil.Logf(client.Debug, "api decode failed method=%s endpoint=%s response_bytes=%d err=%v", method, endpoint, len(raw), err)
 		return fmt.Errorf("decode response: %w", err)
 	}
 
@@ -208,23 +216,36 @@ func (client *Client) GetHostnode(id string) (*Hostnode, error) {
 
 func (client *Client) ListInstances() ([]InstanceListItem, error) {
 	var response struct {
-		Data struct {
-			Instances  []InstanceListItem `json:"instances"`
-			Attributes struct {
-				Instances []InstanceListItem `json:"instances"`
-			} `json:"attributes"`
-		} `json:"data"`
+		Data json.RawMessage `json:"data"`
 	}
 
 	if err := client.request(http.MethodGet, "instances", nil, nil, &response); err != nil {
 		return nil, err
 	}
 
-	if len(response.Data.Instances) > 0 {
-		return response.Data.Instances, nil
+	var direct []InstanceListItem
+	if err := json.Unmarshal(response.Data, &direct); err == nil {
+		debugutil.Logf(client.Debug, "list instances used response path=data count=%d", len(direct))
+		return direct, nil
 	}
 
-	return response.Data.Attributes.Instances, nil
+	var wrapped struct {
+		Instances  []InstanceListItem `json:"instances"`
+		Attributes struct {
+			Instances []InstanceListItem `json:"instances"`
+		} `json:"attributes"`
+	}
+	if err := json.Unmarshal(response.Data, &wrapped); err != nil {
+		return nil, fmt.Errorf("decode instances data: %w", err)
+	}
+
+	if len(wrapped.Instances) > 0 {
+		debugutil.Logf(client.Debug, "list instances used response path=data.instances count=%d", len(wrapped.Instances))
+		return wrapped.Instances, nil
+	}
+
+	debugutil.Logf(client.Debug, "list instances used response path=data.attributes.instances count=%d", len(wrapped.Attributes.Instances))
+	return wrapped.Attributes.Instances, nil
 }
 
 func (client *Client) GetInstance(id string) (*Instance, error) {
@@ -232,8 +253,10 @@ func (client *Client) GetInstance(id string) (*Instance, error) {
 		Data Instance `json:"data"`
 	}
 	if err := client.request(http.MethodGet, fmt.Sprintf("instances/%s", id), nil, nil, &wrapped); err == nil && wrapped.Data.ID != "" {
+		debugutil.Logf(client.Debug, "get instance used wrapped response id=%s", id)
 		return &wrapped.Data, nil
 	}
+	debugutil.Logf(client.Debug, "get instance falling back to direct response id=%s", id)
 
 	var direct Instance
 	if err := client.request(http.MethodGet, fmt.Sprintf("instances/%s", id), nil, nil, &direct); err != nil {

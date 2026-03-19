@@ -114,13 +114,13 @@ Compatibility aliases remain available:
 tensordock-cli servers ssh instance_id
 ```
 
-### Manage command compatibility placeholder
+### Open an instance in the dashboard
 
 ```sh
 tensordock-cli servers manage instance_id
 ```
 
-`servers manage` is retained for compatibility, but the reviewed v2 API docs do not document a dashboard URL for direct browser launching yet.
+`servers manage` opens the matching TensorDock dashboard page for that instance in your browser.
 
 ### Secrets
 

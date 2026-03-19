@@ -5,15 +5,20 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
+	"path"
+	"runtime"
 	"strconv"
 	"strings"
 
 	"github.com/caguiclajmg/tensordock-cli/api"
+	"github.com/caguiclajmg/tensordock-cli/debugutil"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
 
@@ -63,7 +68,7 @@ var (
 	}
 	manageCmd = &cobra.Command{
 		Use:   "manage instance_id",
-		Short: "Compatibility placeholder for dashboard management",
+		Short: "Open an instance in the TensorDock dashboard",
 		Args:  cobra.ExactArgs(1),
 		RunE:  manageServer,
 	}
@@ -125,10 +130,12 @@ func init() {
 }
 
 func serverList(cmd *cobra.Command, args []string) error {
+	commandDebugf("listing servers")
 	instances, err := client.ListInstances()
 	if err != nil {
 		return err
 	}
+	commandDebugf("listing servers result_count=%d", len(instances))
 
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
@@ -150,6 +157,7 @@ func serverList(cmd *cobra.Command, args []string) error {
 }
 
 func serverInfo(cmd *cobra.Command, args []string) error {
+	commandDebugf("fetching server info id=%s", args[0])
 	instance, err := client.GetInstance(args[0])
 	if err != nil {
 		return err
@@ -189,16 +197,19 @@ func serverInfo(cmd *cobra.Command, args []string) error {
 }
 
 func startServer(cmd *cobra.Command, args []string) error {
+	commandDebugf("starting server id=%s", args[0])
 	_, err := client.StartInstance(args[0])
 	return err
 }
 
 func stopServer(cmd *cobra.Command, args []string) error {
+	commandDebugf("stopping server id=%s", args[0])
 	_, err := client.StopInstance(args[0])
 	return err
 }
 
 func deleteServer(cmd *cobra.Command, args []string) error {
+	commandDebugf("deleting server id=%s", args[0])
 	_, err := client.DeleteInstance(args[0])
 	return err
 }
@@ -223,6 +234,7 @@ func deployServer(cmd *cobra.Command, args []string) error {
 	if locationID != "" && hostnodeID != "" {
 		return errors.New("--locationId and --hostnodeId are mutually exclusive")
 	}
+	commandDebugf("deploy target name=%q location_id=%q hostnode_id=%q", args[0], locationID, hostnodeID)
 
 	image, err := resolvedImage(flags)
 	if err != nil {
@@ -260,11 +272,11 @@ func deployServer(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	sshKey, err := resolveSSHKey(flags)
+	sshKey, sshKeySource, err := resolveSSHKey(flags)
 	if err != nil {
 		return err
 	}
-	cloudInitRaw, err := readCloudInit(flags)
+	cloudInitRaw, cloudInitFormat, err := readCloudInit(flags)
 	if err != nil {
 		return err
 	}
@@ -301,6 +313,26 @@ func deployServer(cmd *cobra.Command, args []string) error {
 	request.Data.Attributes.SSHKey = sshKey
 	request.Data.Attributes.CloudInit = cloudInitRaw
 
+	deploySummary := map[string]interface{}{
+		"name":             args[0],
+		"image":            image,
+		"location_id":      locationID,
+		"hostnode_id":      hostnodeID,
+		"gpu_model":        gpuModel,
+		"gpu_count":        gpuCount,
+		"vcpus":            vcpus,
+		"ram_gb":           ram,
+		"storage_gb":       storage,
+		"dedicated_ip":     dedicatedIP,
+		"port_forwards":    len(portForwards),
+		"ssh_key_source":   sshKeySource,
+		"ssh_key":          sshKey,
+		"cloud_init_type":  cloudInitFormat,
+		"cloud_init_bytes": len(cloudInitRaw),
+		"cloud_init":       cloudInitRaw,
+	}
+	commandDebugf("deploy request summary=%s", debugJSONSummary(deploySummary))
+
 	instance, err := client.CreateInstance(request)
 	if err != nil {
 		return err
@@ -311,16 +343,23 @@ func deployServer(cmd *cobra.Command, args []string) error {
 }
 
 func manageServer(cmd *cobra.Command, args []string) error {
-	// TODO: Review whether the v2 API exposes dashboard management URLs for this command.
+	commandDebugf("preparing dashboard management URL for server id=%s", args[0])
 	_, err := client.GetInstance(args[0])
 	if err != nil {
 		return err
 	}
 
-	return errors.New("servers manage is retained for compatibility but no v2 dashboard URL is documented yet")
+	dashboardURL, err := buildInstanceDashboardURL(args[0])
+	if err != nil {
+		return err
+	}
+
+	commandDebugf("launching dashboard URL for server id=%s url=%s", args[0], debugutil.RedactURL(dashboardURL))
+	return openBrowser(dashboardURL)
 }
 
 func sshServer(cmd *cobra.Command, args []string) error {
+	commandDebugf("preparing ssh session for server id=%s", args[0])
 	instance, err := client.GetInstance(args[0])
 	if err != nil {
 		return err
@@ -344,12 +383,62 @@ func sshServer(cmd *cobra.Command, args []string) error {
 	}
 
 	argv := append(strings.Fields(extraFlags), fmt.Sprintf("%s@%s", user, instance.IPAddress))
+	commandDebugf("launching ssh bin=%q user=%q destination=%q extra_arg_count=%d", bin, user, instance.IPAddress, len(argv)-1)
 	sshCmd := exec.Command(bin, argv...)
 	sshCmd.Stdin = os.Stdin
 	sshCmd.Stdout = os.Stdout
 	sshCmd.Stderr = os.Stderr
 
 	return sshCmd.Run()
+}
+
+func buildInstanceDashboardURL(instanceID string) (string, error) {
+	serviceURL := strings.TrimSpace(viper.GetString("serviceUrl"))
+	if serviceURL == "" {
+		return "", errors.New("service URL is not configured")
+	}
+
+	baseURL, err := url.Parse(serviceURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid service URL %q: %w", serviceURL, err)
+	}
+
+	basePath := strings.TrimSuffix(strings.TrimRight(baseURL.Path, "/"), "/api/v2")
+	if basePath == "" {
+		basePath = "/"
+	}
+	if !strings.HasPrefix(basePath, "/") {
+		basePath = "/" + basePath
+	}
+
+	baseURL.Path = path.Join(basePath, "my-servers", instanceID)
+	baseURL.RawPath = ""
+	baseURL.RawQuery = ""
+	baseURL.Fragment = ""
+
+	return baseURL.String(), nil
+}
+
+func openBrowser(targetURL string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", targetURL)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", targetURL)
+	default:
+		cmd = exec.Command("xdg-open", targetURL)
+	}
+
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("open browser: %w", err)
+	}
+
+	return nil
 }
 
 func logAction(message string) func(*cobra.Command, []string) {
@@ -362,6 +451,7 @@ func modifyServer(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	commandDebugf("modifying server id=%s current_status=%q", args[0], instance.Status)
 	if instance.Status != "Stopped" && instance.Status != "StoppedDisassociated" && strings.ToLower(instance.Status) != "stopped" && strings.ToLower(instance.Status) != "stoppeddisassociated" {
 		return errors.New("instance must be stopped or stopped-disassociated before modification")
 	}
@@ -386,6 +476,18 @@ func modifyServer(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	commandDebugf(
+		"modify resource request id=%s cpu=%d cpu_source=%q ram=%d ram_source=%q disk=%d disk_source=%q gpu_model=%q gpu_count=%d",
+		args[0],
+		cpuCores,
+		changedFlagName(flags, "cpuCores", "vcpus"),
+		ramGB,
+		changedFlagName(flags, "ramGb", "ram"),
+		diskGB,
+		changedFlagName(flags, "diskGb", "storage"),
+		gpuModel,
+		gpuCount,
+	)
 
 	if cpuCores == 0 && ramGB == 0 && diskGB == 0 && gpuModel == "" && gpuCount == 0 {
 		return errors.New("at least one resource change is required")
@@ -473,58 +575,65 @@ func resolvedImage(flags *pflag.FlagSet) (string, error) {
 	}
 }
 
-func resolveSSHKey(flags *pflag.FlagSet) (string, error) {
+func resolveSSHKey(flags *pflag.FlagSet) (string, string, error) {
 	sshKey, err := flags.GetString("sshKey")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	secretID, err := flags.GetString("sshKeySecretId")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if sshKey != "" && secretID != "" {
-		return "", errors.New("--sshKey and --sshKeySecretId are mutually exclusive")
+		return "", "", errors.New("--sshKey and --sshKeySecretId are mutually exclusive")
 	}
 	if secretID == "" {
-		return sshKey, nil
+		if strings.TrimSpace(sshKey) == "" {
+			return sshKey, "none", nil
+		}
+		return sshKey, "inline", nil
 	}
 
 	secret, err := client.GetSecret(secretID)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if secret.Value == "" {
-		return "", errors.New("the selected secret did not return a usable SSH key value")
+		return "", "", errors.New("the selected secret did not return a usable SSH key value")
 	}
-	return secret.Value, nil
+	commandDebugf("resolved ssh key from secret id=%s", secretID)
+	return secret.Value, fmt.Sprintf("secret:%s", secretID), nil
 }
 
-func readCloudInit(flags *pflag.FlagSet) (json.RawMessage, error) {
-	path, err := flags.GetString("cloudInitFile")
+func readCloudInit(flags *pflag.FlagSet) (json.RawMessage, string, error) {
+	filePath, err := flags.GetString("cloudInitFile")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if path == "" {
-		return nil, nil
+	if filePath == "" {
+		return nil, "none", nil
 	}
 
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(filePath)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	var value interface{}
+	format := "json"
 	if err := json.Unmarshal(raw, &value); err != nil {
 		if err := yaml.Unmarshal(raw, &value); err != nil {
-			return nil, errors.New("cloudInitFile must contain valid JSON or YAML")
+			return nil, "", errors.New("cloudInitFile must contain valid JSON or YAML")
 		}
+		format = "yaml"
 	}
+	commandDebugf("loaded cloud-init file=%s format=%s bytes=%d", filePath, format, len(raw))
 
 	normalized, err := json.Marshal(value)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return json.RawMessage(normalized), nil
+	return json.RawMessage(normalized), format, nil
 }
 
 func intFlagAlias(flags *pflag.FlagSet, primary string, alias string) (int, error) {
@@ -553,4 +662,13 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func debugJSONSummary(value interface{}) string {
+	raw, err := json.Marshal(debugutil.Sanitize(value))
+	if err != nil {
+		return "<unavailable>"
+	}
+
+	return string(raw)
 }
