@@ -148,6 +148,7 @@ tensordock-cli secrets delete secret_id
 
 ```sh
 tensordock-cli locations list
+tensordock-cli locations list --gpu geforcertx4090-pcie-24gb
 ```
 
 ### Hostnodes

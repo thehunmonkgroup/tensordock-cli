@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/thehunmonkgroup/tensordock-cli/api"
 	"github.com/thehunmonkgroup/tensordock-cli/debugutil"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
@@ -33,8 +34,6 @@ func init() {
 	hostnodesCmd.AddCommand(hostnodesInfoCmd)
 
 	hostnodesListCmd.Flags().String("location", "", "Location UUID filter")
-	hostnodesListCmd.Flags().String("minRamGb", "", "Minimum RAM in GB")
-	hostnodesListCmd.Flags().String("minVcpu", "", "Minimum vCPU count")
 	hostnodesListCmd.Flags().String("gpu", "", "GPU v0 name filter")
 
 	rootCmd.AddCommand(hostnodesCmd)
@@ -42,7 +41,7 @@ func init() {
 
 func listHostnodes(cmd *cobra.Command, args []string) error {
 	filters := map[string]string{}
-	for _, key := range []string{"location", "minRamGb", "minVcpu", "gpu"} {
+	for _, key := range []string{"location", "gpu"} {
 		value, err := cmd.Flags().GetString(key)
 		if err != nil {
 			return err
@@ -54,6 +53,10 @@ func listHostnodes(cmd *cobra.Command, args []string) error {
 	commandDebugf("listing hostnodes filters=%s", debugutil.FormatStringMap(filters))
 
 	hostnodes, err := client.ListHostnodes(cmd.Context(), filters)
+	if err != nil {
+		return err
+	}
+	hostnodes, err = filterHostnodes(hostnodes, filters)
 	if err != nil {
 		return err
 	}
@@ -81,6 +84,34 @@ func listHostnodes(cmd *cobra.Command, args []string) error {
 	t.Render()
 
 	return nil
+}
+
+func filterHostnodes(hostnodes []api.Hostnode, filters map[string]string) ([]api.Hostnode, error) {
+	locationFilter := strings.TrimSpace(filters["location"])
+	gpuFilter := strings.TrimSpace(filters["gpu"])
+
+	filtered := make([]api.Hostnode, 0, len(hostnodes))
+	for _, hostnode := range hostnodes {
+		if locationFilter != "" && hostnode.LocationID != locationFilter && hostnode.Location.UUID != locationFilter {
+			continue
+		}
+		if gpuFilter != "" && !hostnodeHasGPU(hostnode, gpuFilter) {
+			continue
+		}
+		filtered = append(filtered, hostnode)
+	}
+
+	return filtered, nil
+}
+
+func hostnodeHasGPU(hostnode api.Hostnode, gpuFilter string) bool {
+	for _, gpu := range hostnode.AvailableResources.GPUs {
+		if strings.EqualFold(gpu.V0Name, gpuFilter) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func getHostnode(cmd *cobra.Command, args []string) error {

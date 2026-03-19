@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/thehunmonkgroup/tensordock-cli/api"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 )
@@ -23,6 +24,7 @@ var (
 
 func init() {
 	locationsCmd.AddCommand(locationsListCmd)
+	locationsListCmd.Flags().String("gpu", "", "GPU v0 name filter")
 	rootCmd.AddCommand(locationsCmd)
 }
 
@@ -32,6 +34,11 @@ func listLocations(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	gpuFilter, err := cmd.Flags().GetString("gpu")
+	if err != nil {
+		return err
+	}
+	locations = filterLocationsByGPU(locations, gpuFilter)
 	commandDebugf("listing locations result_count=%d", len(locations))
 
 	t := table.NewWriter()
@@ -48,4 +55,30 @@ func listLocations(cmd *cobra.Command, args []string) error {
 	t.Render()
 
 	return nil
+}
+
+func filterLocationsByGPU(locations []api.Location, gpuFilter string) []api.Location {
+	gpuFilter = strings.TrimSpace(gpuFilter)
+	if gpuFilter == "" {
+		return locations
+	}
+
+	filtered := make([]api.Location, 0, len(locations))
+	for _, location := range locations {
+		if locationHasGPU(location, gpuFilter) {
+			filtered = append(filtered, location)
+		}
+	}
+
+	return filtered
+}
+
+func locationHasGPU(location api.Location, gpuFilter string) bool {
+	for _, gpu := range location.GPUs {
+		if strings.EqualFold(gpu.V0Name, gpuFilter) {
+			return true
+		}
+	}
+
+	return false
 }
