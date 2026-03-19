@@ -4,7 +4,7 @@ A CLI client for the TensorDock v2 API.
 
 ## Installation
 
-Install with `go install github.com/caguiclajmg/tensordock-cli` or build locally with:
+Install with `go install github.com/thehunmonkgroup/tensordock-cli` or build locally with:
 
 ```sh
 go build

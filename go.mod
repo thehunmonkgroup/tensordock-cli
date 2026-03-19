@@ -1,4 +1,4 @@
-module github.com/caguiclajmg/tensordock-cli
+module github.com/thehunmonkgroup/tensordock-cli
 
 go 1.23.0
 

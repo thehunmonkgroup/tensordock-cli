@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 
-	"github.com/caguiclajmg/tensordock-cli/commands"
+	"github.com/thehunmonkgroup/tensordock-cli/commands"
 )
 
 func main() {

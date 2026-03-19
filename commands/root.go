@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/caguiclajmg/tensordock-cli/api"
+	"github.com/thehunmonkgroup/tensordock-cli/api"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )

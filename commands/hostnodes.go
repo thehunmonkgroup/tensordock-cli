@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/caguiclajmg/tensordock-cli/debugutil"
+	"github.com/thehunmonkgroup/tensordock-cli/debugutil"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 )

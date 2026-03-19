@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/caguiclajmg/tensordock-cli/debugutil"
+	"github.com/thehunmonkgroup/tensordock-cli/debugutil"
 )
 
 const (
