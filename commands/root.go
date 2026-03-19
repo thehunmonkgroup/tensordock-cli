@@ -22,11 +22,8 @@ var (
 		Version:      api.ClientVersion,
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			versionRequested, err := cmd.Flags().GetBool("version")
-			if err != nil {
-				return err
-			}
-			if versionRequested {
+			versionFlag := cmd.Root().Flags().Lookup("version")
+			if versionFlag != nil && versionFlag.Changed {
 				return nil
 			}
 
