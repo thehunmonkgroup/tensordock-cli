@@ -156,12 +156,3 @@ tensordock-cli locations list
 tensordock-cli hostnodes list --location loc-uuid --gpu geforcertx4090-pcie-24gb
 tensordock-cli hostnodes info hostnode-uuid
 ```
-
-## Removed Legacy Commands
-
-These commands were removed because they depended on legacy endpoints that are not covered by the reviewed v2 API docs:
-
-- `servers restart`
-- `servers status`
-- `billing`
-- `stock list`
