@@ -19,7 +19,7 @@ import (
 
 const (
 	ClientVersion         = "0.9.0"
-	defaultHTTPTimeout    = 60 * time.Second
+	defaultHTTPTimeout    = 120 * time.Second
 	maxResponseBodyBytes  = 2 << 20
 	maxResponseErrorBytes = 4 << 10
 )
