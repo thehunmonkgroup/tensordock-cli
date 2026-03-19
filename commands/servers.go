@@ -64,7 +64,6 @@ var (
 		Short:   "Create an instance",
 		Args:    cobra.ExactArgs(1),
 		RunE:    deployServer,
-		PostRun: logAction("success"),
 	}
 	manageCmd = &cobra.Command{
 		Use:   "manage instance_id",

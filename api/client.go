@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -114,6 +115,11 @@ func (client *Client) request(method string, endpoint string, query map[string]s
 		return fmt.Errorf("api request failed with status %s: %s", res.Status, strings.TrimSpace(string(raw)))
 	}
 
+	if err := apiErrorFromBody(raw); err != nil {
+		debugutil.Logf(client.Debug, "api application error method=%s endpoint=%s status=%s err=%v", method, endpoint, res.Status, err)
+		return err
+	}
+
 	if out == nil || len(raw) == 0 {
 		return nil
 	}
@@ -121,6 +127,38 @@ func (client *Client) request(method string, endpoint string, query map[string]s
 	if err := json.Unmarshal(raw, out); err != nil {
 		debugutil.Logf(client.Debug, "api decode failed method=%s endpoint=%s response_bytes=%d err=%v", method, endpoint, len(raw), err)
 		return fmt.Errorf("decode response: %w", err)
+	}
+
+	return nil
+}
+
+func apiErrorFromBody(raw []byte) error {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	var payload struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+		Status  int    `json:"status"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+
+	message := strings.TrimSpace(payload.Error)
+	if message == "" {
+		message = strings.TrimSpace(payload.Message)
+	}
+	if message == "" {
+		return nil
+	}
+
+	if payload.Status >= 400 || payload.Error != "" {
+		if payload.Status > 0 {
+			return fmt.Errorf("api request failed with status %d: %s", payload.Status, message)
+		}
+		return errors.New(message)
 	}
 
 	return nil
