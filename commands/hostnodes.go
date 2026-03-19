@@ -53,7 +53,7 @@ func listHostnodes(cmd *cobra.Command, args []string) error {
 	}
 	commandDebugf("listing hostnodes filters=%s", debugutil.FormatStringMap(filters))
 
-	hostnodes, err := client.ListHostnodes(filters)
+	hostnodes, err := client.ListHostnodes(cmd.Context(), filters)
 	if err != nil {
 		return err
 	}
@@ -85,7 +85,7 @@ func listHostnodes(cmd *cobra.Command, args []string) error {
 
 func getHostnode(cmd *cobra.Command, args []string) error {
 	commandDebugf("fetching hostnode id=%s", args[0])
-	hostnode, err := client.GetHostnode(args[0])
+	hostnode, err := client.GetHostnode(cmd.Context(), args[0])
 	if err != nil {
 		return err
 	}

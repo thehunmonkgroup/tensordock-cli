@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/caguiclajmg/tensordock-cli/api"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -30,12 +31,20 @@ var (
 			if err != nil {
 				return err
 			}
+			allowInsecureHTTP, err := cmd.Flags().GetBool("allowInsecureHTTP")
+			if err != nil {
+				return err
+			}
 
 			if apiToken == "" && apiTokenEnvVar == "" {
 				return fmt.Errorf("either --apiToken or --apiTokenEnvVar must be provided")
 			}
+			normalizedServiceURL, err := api.ValidateBaseURL(serviceURL, allowInsecureHTTP)
+			if err != nil {
+				return err
+			}
 
-			commandDebugf("config update requested service_url=%s api_token_set=%t api_token_env_var=%q", serviceURL, apiToken != "", apiTokenEnvVar)
+			commandDebugf("config update requested service_url=%s api_token_set=%t api_token_env_var=%q allow_insecure_http=%t", normalizedServiceURL, apiToken != "", apiTokenEnvVar, allowInsecureHTTP)
 
 			if apiToken != "" {
 				if err := confirmAuthReplacement("apiTokenEnvVar"); err != nil {
@@ -53,7 +62,8 @@ var (
 				viper.Set("apiToken", nil)
 			}
 
-			viper.Set("serviceUrl", serviceURL)
+			viper.Set("serviceUrl", normalizedServiceURL)
+			viper.Set("allowInsecureHTTP", allowInsecureHTTP)
 			commandDebugf("writing config file=%s", viper.ConfigFileUsed())
 			return viper.WriteConfig()
 		},
@@ -67,6 +77,7 @@ func init() {
 	configCmd.Flags().String("apiToken", "", "API token")
 	configCmd.Flags().String("apiTokenEnvVar", "", "Environment variable containing the API token")
 	configCmd.Flags().String("serviceUrl", "https://dashboard.tensordock.com/api/v2", "Service URL")
+	configCmd.Flags().Bool("allowInsecureHTTP", false, "Allow an insecure http service URL")
 	configCmd.MarkFlagsMutuallyExclusive("apiToken", "apiTokenEnvVar")
 	rootCmd.AddCommand(configCmd)
 }

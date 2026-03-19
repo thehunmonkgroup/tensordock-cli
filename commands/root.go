@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	cfgFile string
-	client  *api.Client
+	cfgFile           string
+	client            *api.Client
+	allowInsecureHTTP bool
 
 	rootCmd = &cobra.Command{
 		Use:          "tensordock-cli",
@@ -25,8 +26,13 @@ var (
 			}
 
 			serviceURL := viper.GetString("serviceUrl")
+			allowInsecureHTTP := viper.GetBool("allowInsecureHTTP")
 			debug := viper.GetBool("debug")
 			apiToken, err := resolveAPIToken(cmd)
+			if err != nil {
+				return err
+			}
+			normalizedServiceURL, err := api.ValidateBaseURL(serviceURL, allowInsecureHTTP)
 			if err != nil {
 				return err
 			}
@@ -35,9 +41,12 @@ var (
 				return err
 			}
 
-			commandDebugf("initializing client service_url=%s auth_source=%s", serviceURL, authSource)
+			commandDebugf("initializing client service_url=%s auth_source=%s allow_insecure_http=%t", normalizedServiceURL, authSource, allowInsecureHTTP)
 
-			client = api.NewClient(serviceURL, apiToken, debug)
+			client, err = api.NewClient(normalizedServiceURL, apiToken, debug)
+			if err != nil {
+				return err
+			}
 			return nil
 		},
 	}
@@ -57,11 +66,13 @@ func init() {
 	pflags.StringVar(&cfgFile, "config", "", "config file (default is $HOME/.tensordock.yml)")
 	pflags.String("apiToken", "", "API token")
 	pflags.String("apiTokenEnvVar", "", "Environment variable containing the API token")
+	pflags.BoolVar(&allowInsecureHTTP, "allowInsecureHTTP", false, "Allow an insecure http service URL")
 	pflags.Bool("debug", false, "Enable debug mode")
 	rootCmd.MarkFlagsMutuallyExclusive("apiToken", "apiTokenEnvVar")
 
 	viper.BindPFlag("apiToken", pflags.Lookup("apiToken"))
 	viper.BindPFlag("apiTokenEnvVar", pflags.Lookup("apiTokenEnvVar"))
+	viper.BindPFlag("allowInsecureHTTP", pflags.Lookup("allowInsecureHTTP"))
 	viper.BindPFlag("debug", pflags.Lookup("debug"))
 }
 
@@ -76,6 +87,7 @@ func initConfig() {
 	}
 
 	viper.SetDefault("serviceUrl", "https://dashboard.tensordock.com/api/v2")
+	viper.SetDefault("allowInsecureHTTP", false)
 	commandDebugf("config path selected file=%s", viper.ConfigFileUsed())
 
 	err := viper.ReadInConfig()

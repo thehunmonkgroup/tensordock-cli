@@ -90,21 +90,25 @@ func RedactJSONBytes(raw []byte) string {
 }
 
 func Sanitize(value interface{}) interface{} {
+	return sanitizeValue("", value)
+}
+
+func sanitizeValue(parentKey string, value interface{}) interface{} {
 	switch typed := value.(type) {
 	case map[string]interface{}:
 		sanitized := make(map[string]interface{}, len(typed))
 		for key, nested := range typed {
-			if IsSensitiveKey(key) {
+			if IsSensitiveKey(key) || strings.EqualFold(key, "value") {
 				sanitized[key] = "<redacted>"
 				continue
 			}
-			sanitized[key] = Sanitize(nested)
+			sanitized[key] = sanitizeValue(key, nested)
 		}
 		return sanitized
 	case []interface{}:
 		sanitized := make([]interface{}, len(typed))
 		for index, nested := range typed {
-			sanitized[index] = Sanitize(nested)
+			sanitized[index] = sanitizeValue(parentKey, nested)
 		}
 		return sanitized
 	default:

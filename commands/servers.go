@@ -8,7 +8,8 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path"
+	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -21,6 +22,10 @@ import (
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
+
+const maxCloudInitBytes = 1 << 20
+
+var cloudInitPermissionsPattern = regexp.MustCompile(`^[0-7]{3,4}$`)
 
 var (
 	serversCmd = &cobra.Command{
@@ -60,10 +65,10 @@ var (
 		PostRun: logAction("success"),
 	}
 	deployCmd = &cobra.Command{
-		Use:     "deploy [flags] name",
-		Short:   "Create an instance",
-		Args:    cobra.ExactArgs(1),
-		RunE:    deployServer,
+		Use:   "deploy [flags] name",
+		Short: "Create an instance",
+		Args:  cobra.ExactArgs(1),
+		RunE:  deployServer,
 	}
 	manageCmd = &cobra.Command{
 		Use:   "manage instance_id",
@@ -135,7 +140,7 @@ func init() {
 
 func serverList(cmd *cobra.Command, args []string) error {
 	commandDebugf("listing servers")
-	instances, err := client.ListInstances()
+	instances, err := client.ListInstances(cmd.Context())
 	if err != nil {
 		return err
 	}
@@ -162,7 +167,7 @@ func serverList(cmd *cobra.Command, args []string) error {
 
 func serverInfo(cmd *cobra.Command, args []string) error {
 	commandDebugf("fetching server info id=%s", args[0])
-	instance, err := client.GetInstance(args[0])
+	instance, err := client.GetInstance(cmd.Context(), args[0])
 	if err != nil {
 		return err
 	}
@@ -202,19 +207,19 @@ func serverInfo(cmd *cobra.Command, args []string) error {
 
 func startServer(cmd *cobra.Command, args []string) error {
 	commandDebugf("starting server id=%s", args[0])
-	_, err := client.StartInstance(args[0])
+	_, err := client.StartInstance(cmd.Context(), args[0])
 	return err
 }
 
 func stopServer(cmd *cobra.Command, args []string) error {
 	commandDebugf("stopping server id=%s", args[0])
-	_, err := client.StopInstance(args[0])
+	_, err := client.StopInstance(cmd.Context(), args[0])
 	return err
 }
 
 func deleteServer(cmd *cobra.Command, args []string) error {
 	commandDebugf("deleting server id=%s", args[0])
-	_, err := client.DeleteInstance(args[0])
+	_, err := client.DeleteInstance(cmd.Context(), args[0])
 	return err
 }
 
@@ -272,7 +277,7 @@ func deployServer(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	sshKey, sshKeySource, err := resolveSSHKey(flags)
+	sshKey, sshKeySource, err := resolveSSHKey(cmd, flags)
 	if err != nil {
 		return err
 	}
@@ -283,6 +288,15 @@ func deployServer(cmd *cobra.Command, args []string) error {
 
 	if storage < 100 {
 		return errors.New("storage must be at least 100 GB")
+	}
+	if vcpus < 1 {
+		return errors.New("vcpus must be at least 1")
+	}
+	if ram < 1 {
+		return errors.New("ram must be at least 1 GB")
+	}
+	if gpuCount < 0 {
+		return errors.New("gpuCount cannot be negative")
 	}
 	if (gpuModel == "") != (gpuCount == 0) {
 		return errors.New("both --gpuModel and --gpuCount are required when specifying GPUs")
@@ -329,14 +343,12 @@ func deployServer(cmd *cobra.Command, args []string) error {
 		"dedicated_ip":     dedicatedIP,
 		"port_forwards":    len(portForwards),
 		"ssh_key_source":   sshKeySource,
-		"ssh_key":          sshKey,
 		"cloud_init_type":  cloudInitFormat,
 		"cloud_init_bytes": len(cloudInitRaw),
-		"cloud_init":       cloudInitRaw,
 	}
 	commandDebugf("deploy request summary=%s", debugJSONSummary(deploySummary))
 
-	instance, err := client.CreateInstance(request)
+	instance, err := client.CreateInstance(cmd.Context(), request)
 	if err != nil {
 		return err
 	}
@@ -347,7 +359,7 @@ func deployServer(cmd *cobra.Command, args []string) error {
 
 func manageServer(cmd *cobra.Command, args []string) error {
 	commandDebugf("preparing dashboard management URL for server id=%s", args[0])
-	_, err := client.GetInstance(args[0])
+	_, err := client.GetInstance(cmd.Context(), args[0])
 	if err != nil {
 		return err
 	}
@@ -358,12 +370,12 @@ func manageServer(cmd *cobra.Command, args []string) error {
 	}
 
 	commandDebugf("launching dashboard URL for server id=%s url=%s", args[0], debugutil.RedactURL(dashboardURL))
-	return openBrowser(dashboardURL)
+	return openBrowser(cmd, dashboardURL)
 }
 
 func sshServer(cmd *cobra.Command, args []string) error {
 	commandDebugf("preparing ssh session for server id=%s", args[0])
-	instance, err := client.GetInstance(args[0])
+	instance, err := client.GetInstance(cmd.Context(), args[0])
 	if err != nil {
 		return err
 	}
@@ -385,9 +397,18 @@ func sshServer(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	bin = strings.TrimSpace(bin)
+	if bin == "" {
+		return errors.New("ssh client executable cannot be empty")
+	}
+	user = strings.TrimSpace(user)
+	if user == "" {
+		return errors.New("ssh user cannot be empty")
+	}
+
 	argv := append(strings.Fields(extraFlags), fmt.Sprintf("%s@%s", user, instance.IPAddress))
 	commandDebugf("launching ssh bin=%q user=%q destination=%q extra_arg_count=%d", bin, user, instance.IPAddress, len(argv)-1)
-	sshCmd := exec.Command(bin, argv...)
+	sshCmd := exec.CommandContext(cmd.Context(), bin, argv...)
 	sshCmd.Stdin = os.Stdin
 	sshCmd.Stdout = os.Stdout
 	sshCmd.Stderr = os.Stderr
@@ -401,43 +422,41 @@ func buildInstanceDashboardURL(instanceID string) (string, error) {
 		return "", errors.New("service URL is not configured")
 	}
 
-	baseURL, err := url.Parse(serviceURL)
+	baseURL, err := api.ValidateBaseURL(serviceURL, viper.GetBool("allowInsecureHTTP"))
+	if err != nil {
+		return "", err
+	}
+
+	parsed, err := url.Parse(baseURL)
 	if err != nil {
 		return "", fmt.Errorf("invalid service URL %q: %w", serviceURL, err)
 	}
 
-	basePath := strings.TrimSuffix(strings.TrimRight(baseURL.Path, "/"), "/api/v2")
-	if basePath == "" {
-		basePath = "/"
-	}
-	if !strings.HasPrefix(basePath, "/") {
-		basePath = "/" + basePath
-	}
+	basePath := strings.TrimSuffix(strings.TrimRight(parsed.Path, "/"), "/api/v2")
+	parsed.Path = filepath.ToSlash(filepath.Join(basePath, "my-servers", instanceID))
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
 
-	baseURL.Path = path.Join(basePath, "my-servers", instanceID)
-	baseURL.RawPath = ""
-	baseURL.RawQuery = ""
-	baseURL.Fragment = ""
-
-	return baseURL.String(), nil
+	return parsed.String(), nil
 }
 
-func openBrowser(targetURL string) error {
-	var cmd *exec.Cmd
+func openBrowser(command *cobra.Command, targetURL string) error {
+	var browserCmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = exec.Command("open", targetURL)
+		browserCmd = exec.CommandContext(command.Context(), "open", targetURL)
 	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", targetURL)
+		browserCmd = exec.CommandContext(command.Context(), "rundll32", "url.dll,FileProtocolHandler", targetURL)
 	default:
-		cmd = exec.Command("xdg-open", targetURL)
+		browserCmd = exec.CommandContext(command.Context(), "xdg-open", targetURL)
 	}
 
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	browserCmd.Stdin = os.Stdin
+	browserCmd.Stdout = os.Stdout
+	browserCmd.Stderr = os.Stderr
 
-	if err := cmd.Run(); err != nil {
+	if err := browserCmd.Run(); err != nil {
 		return fmt.Errorf("open browser: %w", err)
 	}
 
@@ -450,7 +469,7 @@ func logAction(message string) func(*cobra.Command, []string) {
 
 func modifyServer(cmd *cobra.Command, args []string) error {
 	flags := cmd.Flags()
-	instance, err := client.GetInstance(args[0])
+	instance, err := client.GetInstance(cmd.Context(), args[0])
 	if err != nil {
 		return err
 	}
@@ -498,6 +517,9 @@ func modifyServer(cmd *cobra.Command, args []string) error {
 	if cpuCores != 0 && cpuCores%2 != 0 {
 		return errors.New("cpuCores must be a multiple of 2")
 	}
+	if cpuCores < 0 || ramGB < 0 || diskGB < 0 || gpuCount < 0 {
+		return errors.New("resource values cannot be negative")
+	}
 	if ramGB != 0 && !validModifyRAM(ramGB) {
 		return errors.New("ramGb must be one of the documented allowed values")
 	}
@@ -528,7 +550,7 @@ func modifyServer(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	_, err = client.ModifyInstance(args[0], request)
+	_, err = client.ModifyInstance(cmd.Context(), args[0], request)
 	return err
 }
 
@@ -546,6 +568,9 @@ func parsePortForwards(values []string) ([]api.PortForward, error) {
 		externalPort, err := strconv.Atoi(parts[1])
 		if err != nil {
 			return nil, fmt.Errorf("invalid external port %q", parts[1])
+		}
+		if !validPort(internalPort) || !validPort(externalPort) {
+			return nil, fmt.Errorf("invalid port forward %q: ports must be between 1 and 65535", value)
 		}
 		portForwards = append(portForwards, api.PortForward{
 			InternalPort: internalPort,
@@ -578,7 +603,7 @@ func resolvedImage(flags *pflag.FlagSet) (string, error) {
 	}
 }
 
-func resolveSSHKey(flags *pflag.FlagSet) (string, string, error) {
+func resolveSSHKey(cmd *cobra.Command, flags *pflag.FlagSet) (string, string, error) {
 	sshKey, err := flags.GetString("sshKey")
 	if err != nil {
 		return "", "", err
@@ -597,7 +622,7 @@ func resolveSSHKey(flags *pflag.FlagSet) (string, string, error) {
 		return sshKey, "inline", nil
 	}
 
-	secret, err := client.GetSecret(secretID)
+	secret, err := client.GetSecret(cmd.Context(), secretID)
 	if err != nil {
 		return "", "", err
 	}
@@ -640,6 +665,9 @@ func readCloudInitFile(filePath string) (json.RawMessage, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	if len(raw) > maxCloudInitBytes {
+		return nil, "", fmt.Errorf("cloudInitFile exceeds %d bytes", maxCloudInitBytes)
+	}
 
 	var value interface{}
 	format := "json"
@@ -654,6 +682,9 @@ func readCloudInitFile(filePath string) (json.RawMessage, string, error) {
 	normalized, err := json.Marshal(value)
 	if err != nil {
 		return nil, "", err
+	}
+	if len(normalized) > maxCloudInitBytes {
+		return nil, "", fmt.Errorf("cloud-init payload exceeds %d bytes", maxCloudInitBytes)
 	}
 	return json.RawMessage(normalized), format, nil
 }
@@ -714,6 +745,9 @@ func buildCloudInitFromFlags(flags *pflag.FlagSet) (json.RawMessage, string, err
 	if err != nil {
 		return nil, "", err
 	}
+	if len(raw) > maxCloudInitBytes {
+		return nil, "", fmt.Errorf("cloud-init payload exceeds %d bytes", maxCloudInitBytes)
+	}
 	return json.RawMessage(raw), "flags", nil
 }
 
@@ -732,6 +766,9 @@ func parseCloudInitWriteFile(value string) (map[string]string, error) {
 			if strings.TrimSpace(fieldValue) == "" {
 				return nil, fmt.Errorf("invalid cloud-init write_files entry %q: %s cannot be empty", value, key)
 			}
+			if _, exists := writeFile[key]; exists {
+				return nil, fmt.Errorf("invalid cloud-init write_files entry %q: duplicate key %q", value, key)
+			}
 			writeFile[key] = fieldValue
 		default:
 			return nil, fmt.Errorf("invalid cloud-init write_files entry %q: unsupported key %q", value, key)
@@ -741,8 +778,15 @@ func parseCloudInitWriteFile(value string) (map[string]string, error) {
 	if writeFile["path"] == "" || writeFile["content"] == "" {
 		return nil, fmt.Errorf("invalid cloud-init write_files entry %q: path and content are required", value)
 	}
+	if permissions := writeFile["permissions"]; permissions != "" && !cloudInitPermissionsPattern.MatchString(permissions) {
+		return nil, fmt.Errorf("invalid cloud-init write_files entry %q: permissions must be 3 or 4 octal digits", value)
+	}
 
 	return writeFile, nil
+}
+
+func validPort(value int) bool {
+	return value >= 1 && value <= 65535
 }
 
 func intFlagAlias(flags *pflag.FlagSet, primary string, alias string) (int, error) {

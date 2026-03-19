@@ -57,7 +57,7 @@ func init() {
 
 func listSecrets(cmd *cobra.Command, args []string) error {
 	commandDebugf("listing secrets")
-	secrets, err := client.ListSecrets()
+	secrets, err := client.ListSecrets(cmd.Context())
 	if err != nil {
 		return err
 	}
@@ -76,7 +76,7 @@ func listSecrets(cmd *cobra.Command, args []string) error {
 
 func getSecret(cmd *cobra.Command, args []string) error {
 	commandDebugf("fetching secret id=%s", args[0])
-	secret, err := client.GetSecret(args[0])
+	secret, err := client.GetSecret(cmd.Context(), args[0])
 	if err != nil {
 		return err
 	}
@@ -114,7 +114,7 @@ func createSecret(cmd *cobra.Command, args []string) error {
 		Type:  secretType,
 	}
 
-	secret, err := client.CreateSecret(request)
+	secret, err := client.CreateSecret(cmd.Context(), request)
 	if err != nil {
 		return err
 	}
@@ -125,6 +125,6 @@ func createSecret(cmd *cobra.Command, args []string) error {
 
 func deleteSecret(cmd *cobra.Command, args []string) error {
 	commandDebugf("deleting secret id=%s", args[0])
-	_, err := client.DeleteSecret(args[0])
+	_, err := client.DeleteSecret(cmd.Context(), args[0])
 	return err
 }

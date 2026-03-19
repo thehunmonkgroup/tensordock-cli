@@ -26,6 +26,8 @@ tensordock-cli config --apiTokenEnvVar TENSORDOCK_API_TOKEN
 
 The default API base URL is `https://dashboard.tensordock.com/api/v2`.
 
+Custom `http://` service URLs are rejected unless you explicitly opt in with `--allowInsecureHTTP` or store that setting with `tensordock-cli config`.
+
 You can also pass `--apiToken` or `--apiTokenEnvVar` on individual commands.
 
 If you switch between stored auth types, the CLI warns and asks for confirmation before replacing the existing config entry.
@@ -117,6 +119,12 @@ Compatibility aliases remain available:
 
 ```sh
 tensordock-cli servers ssh instance_id
+```
+
+You can pass extra SSH arguments with `--extraFlags`:
+
+```sh
+tensordock-cli servers ssh instance_id --extraFlags="-i /path/to/key -p 2222"
 ```
 
 ### Open an instance in the dashboard

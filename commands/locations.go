@@ -28,7 +28,7 @@ func init() {
 
 func listLocations(cmd *cobra.Command, args []string) error {
 	commandDebugf("listing locations")
-	locations, err := client.ListLocations()
+	locations, err := client.ListLocations(cmd.Context())
 	if err != nil {
 		return err
 	}
