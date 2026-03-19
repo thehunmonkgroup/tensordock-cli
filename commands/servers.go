@@ -60,9 +60,9 @@ var (
 		PostRun: logAction("success"),
 	}
 	deployCmd = &cobra.Command{
-		Use:     "deploy [flags] name [admin_user] [admin_pass]",
+		Use:     "deploy [flags] name",
 		Short:   "Create an instance",
-		Args:    cobra.RangeArgs(1, 3),
+		Args:    cobra.ExactArgs(1),
 		RunE:    deployServer,
 		PostRun: logAction("success"),
 	}
@@ -107,6 +107,11 @@ func init() {
 	deployCmd.Flags().String("sshKey", "", "SSH public key content")
 	deployCmd.Flags().String("sshKeySecretId", "", "Secret ID containing an SSH key")
 	deployCmd.Flags().String("cloudInitFile", "", "Path to JSON or YAML cloud-init object")
+	deployCmd.Flags().StringArray("cloudInitRunCmd", nil, "cloud_init runcmd entry; repeat flag to add multiple commands")
+	deployCmd.Flags().StringArray("cloudInitPackage", nil, "cloud_init package entry; repeat flag to add multiple packages")
+	deployCmd.Flags().Bool("cloudInitPackageUpdate", false, "Set cloud_init package_update")
+	deployCmd.Flags().Bool("cloudInitPackageUpgrade", false, "Set cloud_init package_upgrade")
+	deployCmd.Flags().StringArray("cloudInitWriteFile", nil, "cloud_init write_files entry as path=<...>,content=<...>[,owner=<...>][,permissions=<...>]")
 	deployCmd.Flags().String("gpuModel", "", "GPU model v0 name")
 	deployCmd.Flags().Int("gpuCount", 0, "Number of GPUs")
 	deployCmd.Flags().Int("vcpus", 4, "Number of vCPUs")
@@ -216,10 +221,6 @@ func deleteServer(cmd *cobra.Command, args []string) error {
 
 func deployServer(cmd *cobra.Command, args []string) error {
 	flags := cmd.Flags()
-	if len(args) > 1 {
-		log.Print("warning: legacy admin_user/admin_pass arguments are ignored by the v2 API")
-	}
-
 	locationID, err := flags.GetString("locationId")
 	if err != nil {
 		return err
@@ -276,13 +277,16 @@ func deployServer(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	cloudInitRaw, cloudInitFormat, err := readCloudInit(flags)
+	cloudInitRaw, cloudInitFormat, err := resolveCloudInit(flags)
 	if err != nil {
 		return err
 	}
 
 	if storage < 100 {
 		return errors.New("storage must be at least 100 GB")
+	}
+	if (gpuModel == "") != (gpuCount == 0) {
+		return errors.New("both --gpuModel and --gpuCount are required when specifying GPUs")
 	}
 	if locationID != "" && gpuCount < 1 {
 		return errors.New("location-based deployment requires at least one GPU")
@@ -605,11 +609,30 @@ func resolveSSHKey(flags *pflag.FlagSet) (string, string, error) {
 	return secret.Value, fmt.Sprintf("secret:%s", secretID), nil
 }
 
-func readCloudInit(flags *pflag.FlagSet) (json.RawMessage, string, error) {
+func resolveCloudInit(flags *pflag.FlagSet) (json.RawMessage, string, error) {
 	filePath, err := flags.GetString("cloudInitFile")
 	if err != nil {
 		return nil, "", err
 	}
+
+	explicitRaw, explicitFormat, err := buildCloudInitFromFlags(flags)
+	if err != nil {
+		return nil, "", err
+	}
+	if filePath != "" && explicitRaw != nil {
+		return nil, "", errors.New("--cloudInitFile cannot be combined with other cloud-init flags")
+	}
+	if filePath != "" {
+		return readCloudInitFile(filePath)
+	}
+	if explicitRaw != nil {
+		return explicitRaw, explicitFormat, nil
+	}
+
+	return nil, "none", nil
+}
+
+func readCloudInitFile(filePath string) (json.RawMessage, string, error) {
 	if filePath == "" {
 		return nil, "none", nil
 	}
@@ -634,6 +657,93 @@ func readCloudInit(flags *pflag.FlagSet) (json.RawMessage, string, error) {
 		return nil, "", err
 	}
 	return json.RawMessage(normalized), format, nil
+}
+
+func buildCloudInitFromFlags(flags *pflag.FlagSet) (json.RawMessage, string, error) {
+	runCmds, err := flags.GetStringArray("cloudInitRunCmd")
+	if err != nil {
+		return nil, "", err
+	}
+	packages, err := flags.GetStringArray("cloudInitPackage")
+	if err != nil {
+		return nil, "", err
+	}
+	packageUpdate, err := flags.GetBool("cloudInitPackageUpdate")
+	if err != nil {
+		return nil, "", err
+	}
+	packageUpgrade, err := flags.GetBool("cloudInitPackageUpgrade")
+	if err != nil {
+		return nil, "", err
+	}
+	writeFileFlags, err := flags.GetStringArray("cloudInitWriteFile")
+	if err != nil {
+		return nil, "", err
+	}
+
+	if len(runCmds) == 0 && len(packages) == 0 && len(writeFileFlags) == 0 &&
+		!flags.Changed("cloudInitPackageUpdate") && !flags.Changed("cloudInitPackageUpgrade") {
+		return nil, "", nil
+	}
+
+	cloudInit := map[string]interface{}{}
+	if len(runCmds) > 0 {
+		cloudInit["runcmd"] = runCmds
+	}
+	if len(packages) > 0 {
+		cloudInit["packages"] = packages
+	}
+	if flags.Changed("cloudInitPackageUpdate") {
+		cloudInit["package_update"] = packageUpdate
+	}
+	if flags.Changed("cloudInitPackageUpgrade") {
+		cloudInit["package_upgrade"] = packageUpgrade
+	}
+	if len(writeFileFlags) > 0 {
+		writeFiles := make([]map[string]string, 0, len(writeFileFlags))
+		for _, value := range writeFileFlags {
+			writeFile, err := parseCloudInitWriteFile(value)
+			if err != nil {
+				return nil, "", err
+			}
+			writeFiles = append(writeFiles, writeFile)
+		}
+		cloudInit["write_files"] = writeFiles
+	}
+
+	raw, err := json.Marshal(cloudInit)
+	if err != nil {
+		return nil, "", err
+	}
+	return json.RawMessage(raw), "flags", nil
+}
+
+func parseCloudInitWriteFile(value string) (map[string]string, error) {
+	writeFile := map[string]string{}
+	for _, field := range strings.Split(value, ",") {
+		parts := strings.SplitN(field, "=", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid cloud-init write_files entry %q: expected key=value segments", value)
+		}
+
+		key := strings.TrimSpace(parts[0])
+		fieldValue := parts[1]
+		switch key {
+		case "path", "content", "owner", "permissions":
+			if strings.TrimSpace(fieldValue) == "" {
+				return nil, fmt.Errorf("invalid cloud-init write_files entry %q: %s cannot be empty", value, key)
+			}
+			writeFile[key] = fieldValue
+		default:
+			return nil, fmt.Errorf("invalid cloud-init write_files entry %q: unsupported key %q", value, key)
+		}
+	}
+
+	if writeFile["path"] == "" || writeFile["content"] == "" {
+		return nil, fmt.Errorf("invalid cloud-init write_files entry %q: path and content are required", value)
+	}
+
+	return writeFile, nil
 }
 
 func intFlagAlias(flags *pflag.FlagSet, primary string, alias string) (int, error) {

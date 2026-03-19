@@ -87,9 +87,14 @@ Additional deploy options:
 
 - `--dedicatedIp`
 - `--cloudInitFile path/to/cloud-init.yaml`
+- `--cloudInitRunCmd "echo hello"` (repeatable)
+- `--cloudInitPackage curl` (repeatable)
+- `--cloudInitPackageUpdate`
+- `--cloudInitPackageUpgrade`
+- `--cloudInitWriteFile 'path=/etc/motd,content=hello world[,owner=root:root][,permissions=0644]'` (repeatable)
 - compatibility alias `--os` for simple image mapping
 
-Legacy positional `admin_user` and `admin_pass` arguments are accepted for compatibility but ignored by the v2 API.
+`--cloudInitFile` cannot be combined with the explicit `cloud_init` flags.
 
 ### Modify an instance
 
