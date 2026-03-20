@@ -4,67 +4,76 @@ A CLI client for the TensorDock v2 API.
 
 ## Installation
 
-Install with `go install github.com/thehunmonkgroup/tensordock-cli` or build locally with:
+Install with:
+
+```sh
+go install github.com/thehunmonkgroup/tensordock-cli@latest
+```
+
+Build locally with Go 1.23+:
 
 ```sh
 go build
 ```
 
-## Configuration
+## Quick Start
 
-If `TENSORDOCK_API_TOKEN` is set in your environment, the CLI uses it automatically by default.
+If `TENSORDOCK_API_TOKEN` is set, the CLI uses it automatically by default:
 
-Store your TensorDock API token:
+```sh
+export TENSORDOCK_API_TOKEN=your_token
+tensordock-cli servers list
+```
+
+To store configuration instead, use one of:
 
 ```sh
 tensordock-cli config --apiToken your_token
+# Set a custom variable name to read the API token from 
+tensordock-cli config --apiTokenEnvVar CUSTOM_API_TOKEN
 ```
 
-Or store the environment variable name that should be read at runtime:
+You can also pass `--apiToken` or `--apiTokenEnvVar` on individual commands.
+
+## Configuration Notes
+
+The default API base URL is `https://dashboard.tensordock.com/api/v2`.
+
+To use a different API endpoint:
 
 ```sh
-tensordock-cli config --apiTokenEnvVar TENSORDOCK_API_TOKEN
+tensordock-cli config --serviceUrl https://example.com/api/v2
 ```
 
 `tensordock-cli config` writes only the values you explicitly pass, so the config file stays minimal instead of being populated with default values.
 
-The default API base URL is `https://dashboard.tensordock.com/api/v2`.
-
 Custom `http://` service URLs are rejected unless you explicitly opt in with `--allowInsecureHTTP` or store that setting with `tensordock-cli config`.
-
-You can also pass `--apiToken` or `--apiTokenEnvVar` on individual commands.
 
 If you switch between stored auth types, the CLI warns and asks for confirmation before replacing the existing config entry.
 
-## Supported Commands
-
-### List instances
+## Common Commands
 
 ```sh
 tensordock-cli servers list
+tensordock-cli servers info [instance_id]
+tensordock-cli servers start [instance_id]
+tensordock-cli servers stop [instance_id]
+tensordock-cli servers delete [instance_id]
+tensordock-cli servers manage [instance_id]
+tensordock-cli secrets list
+tensordock-cli locations list --gpu geforcertx4090-pcie-24gb
+tensordock-cli hostnodes list --location [location_id] --gpu geforcertx4090-pcie-24gb
 ```
 
-### Get instance info
+Use `tensordock-cli --help` or `tensordock-cli <command> --help` for the full command surface.
 
-```sh
-tensordock-cli servers info instance_id
-```
-
-### Start / stop / delete an instance
-
-```sh
-tensordock-cli servers start instance_id
-tensordock-cli servers stop instance_id
-tensordock-cli servers delete instance_id
-```
-
-### Create an instance
+## Deploy an Instance
 
 Location-based deployment:
 
 ```sh
 tensordock-cli servers deploy my-instance \
-  --locationId loc-uuid \
+  --locationId [location_id] \
   --image ubuntu2404 \
   --gpuModel geforcertx4090-pcie-24gb \
   --gpuCount 1 \
@@ -78,14 +87,14 @@ Hostnode-based deployment:
 
 ```sh
 tensordock-cli servers deploy my-instance \
-  --hostnodeId hostnode-uuid \
+  --hostnodeId [hostnode_id] \
   --image ubuntu2404 \
   --gpuModel geforcertx4090-pcie-24gb \
   --gpuCount 1 \
   --vcpus 4 \
   --ram 8 \
   --storage 100 \
-  --sshKeySecretId secret-uuid \
+  --sshKeySecretId [secret_id] \
   --portForward 22:30022
 ```
 
@@ -102,10 +111,10 @@ Additional deploy options:
 
 `--cloudInitFile` cannot be combined with the explicit `cloud_init` flags.
 
-### Modify an instance
+## Modify or Access an Instance
 
 ```sh
-tensordock-cli servers modify instance_id \
+tensordock-cli servers modify [instance_id] \
   --cpuCores 8 \
   --ramGb 32 \
   --diskGb 200 \
@@ -113,51 +122,13 @@ tensordock-cli servers modify instance_id \
   --gpuCount 1
 ```
 
-Compatibility aliases remain available:
+Compatibility aliases:
 
 - `--vcpus` for `--cpuCores`
 - `--ram` for `--ramGb`
 - `--storage` for `--diskGb`
 
-### Open an SSH session
-
 ```sh
-tensordock-cli servers ssh instance_id
-```
-
-You can pass extra SSH arguments with `--extraFlags`:
-
-```sh
-tensordock-cli servers ssh instance_id --extraFlags="-i /path/to/key -p 2222"
-```
-
-### Open an instance in the dashboard
-
-```sh
-tensordock-cli servers manage instance_id
-```
-
-`servers manage` opens the matching TensorDock dashboard page for that instance in your browser.
-
-### Secrets
-
-```sh
-tensordock-cli secrets list
-tensordock-cli secrets get secret_id
-tensordock-cli secrets create --name my-key --type SSHKEY --value "ssh-ed25519 AAAA..."
-tensordock-cli secrets delete secret_id
-```
-
-### Locations
-
-```sh
-tensordock-cli locations list
-tensordock-cli locations list --gpu geforcertx4090-pcie-24gb
-```
-
-### Hostnodes
-
-```sh
-tensordock-cli hostnodes list --location loc-uuid --gpu geforcertx4090-pcie-24gb
-tensordock-cli hostnodes info hostnode-uuid
+tensordock-cli servers ssh [instance_id]
+tensordock-cli servers ssh [instance_id] --extraFlags="-i /path/to/key -p 2222"
 ```
