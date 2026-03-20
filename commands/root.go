@@ -2,13 +2,12 @@ package commands
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 
-	"github.com/thehunmonkgroup/tensordock-cli/api"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/thehunmonkgroup/tensordock-cli/api"
 )
 
 var (
@@ -57,6 +56,8 @@ var (
 		},
 	}
 )
+
+const defaultAPITokenEnvVar = "TENSORDOCK_API_TOKEN"
 
 const rootHelpTemplate = `TensorDock v2 CLI {{.Root.Version}}
 
@@ -126,11 +127,11 @@ func initConfig() {
 
 	viper.SetDefault("serviceUrl", "https://dashboard.tensordock.com/api/v2")
 	viper.SetDefault("allowInsecureHTTP", false)
+	viper.SetDefault("apiTokenEnvVar", defaultAPITokenEnvVar)
 	commandDebugf("config path selected file=%s", viper.ConfigFileUsed())
 
 	err := viper.ReadInConfig()
 	if err != nil {
-		log.Printf("warning: config file %v not found", viper.ConfigFileUsed())
 		commandDebugf("config file missing file=%s err=%v", viper.ConfigFileUsed(), err)
 	} else {
 		commandDebugf("config file loaded file=%s", viper.ConfigFileUsed())

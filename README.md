@@ -12,6 +12,8 @@ go build
 
 ## Configuration
 
+If `TENSORDOCK_API_TOKEN` is set in your environment, the CLI uses it automatically by default.
+
 Store your TensorDock API token:
 
 ```sh
@@ -23,6 +25,8 @@ Or store the environment variable name that should be read at runtime:
 ```sh
 tensordock-cli config --apiTokenEnvVar TENSORDOCK_API_TOKEN
 ```
+
+`tensordock-cli config` writes only the values you explicitly pass, so the config file stays minimal instead of being populated with default values.
 
 The default API base URL is `https://dashboard.tensordock.com/api/v2`.
 

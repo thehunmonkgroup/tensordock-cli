@@ -3,10 +3,10 @@ package commands
 import (
 	"fmt"
 
-	"github.com/thehunmonkgroup/tensordock-cli/debugutil"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"github.com/thehunmonkgroup/tensordock-cli/debugutil"
 )
 
 func debugEnabled() bool {
@@ -36,6 +36,9 @@ func describeAPITokenSource(cmd *cobra.Command) (string, error) {
 	}
 
 	if name := viper.GetString("apiTokenEnvVar"); name != "" {
+		if !viper.InConfig("apiTokenEnvVar") && name == defaultAPITokenEnvVar {
+			return fmt.Sprintf("default:apiTokenEnvVar(%s)", name), nil
+		}
 		return fmt.Sprintf("config:apiTokenEnvVar(%s)", name), nil
 	}
 
