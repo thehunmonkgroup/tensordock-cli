@@ -14,12 +14,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/thehunmonkgroup/tensordock-cli/api"
-	"github.com/thehunmonkgroup/tensordock-cli/debugutil"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"github.com/thehunmonkgroup/tensordock-cli/api"
+	"github.com/thehunmonkgroup/tensordock-cli/debugutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -77,7 +77,7 @@ var (
 		RunE:  manageServer,
 	}
 	sshCmd = &cobra.Command{
-		Use:   "ssh instance_id",
+		Use:   "ssh instance_id_or_name",
 		Short: "Launch an SSH session with an instance",
 		Args:  cobra.ExactArgs(1),
 		RunE:  sshServer,
@@ -374,8 +374,13 @@ func manageServer(cmd *cobra.Command, args []string) error {
 }
 
 func sshServer(cmd *cobra.Command, args []string) error {
-	commandDebugf("preparing ssh session for server id=%s", args[0])
-	instance, err := client.GetInstance(cmd.Context(), args[0])
+	commandDebugf("preparing ssh session for server target=%s", args[0])
+	instanceID, err := resolveInstanceIDByTarget(cmd, args[0])
+	if err != nil {
+		return err
+	}
+
+	instance, err := client.GetInstance(cmd.Context(), instanceID)
 	if err != nil {
 		return err
 	}
@@ -414,6 +419,42 @@ func sshServer(cmd *cobra.Command, args []string) error {
 	sshCmd.Stderr = os.Stderr
 
 	return sshCmd.Run()
+}
+
+func resolveInstanceIDByTarget(cmd *cobra.Command, target string) (string, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "", errors.New("instance target cannot be empty")
+	}
+
+	instances, err := client.ListInstances(cmd.Context())
+	if err != nil {
+		return "", err
+	}
+
+	for _, instance := range instances {
+		if instance.ID == target {
+			commandDebugf("resolved ssh target=%q as instance id", target)
+			return instance.ID, nil
+		}
+	}
+
+	var matches []api.InstanceListItem
+	for _, instance := range instances {
+		if firstNonEmpty(instance.Name, instance.Attributes.Name) == target {
+			matches = append(matches, instance)
+		}
+	}
+
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("no instance found matching %q; use `tensordock-cli servers list` to find the instance ID or exact name", target)
+	case 1:
+		commandDebugf("resolved ssh target=%q as instance name id=%s", target, matches[0].ID)
+		return matches[0].ID, nil
+	default:
+		return "", fmt.Errorf("multiple instances share the name %q; use `tensordock-cli servers list` and retry with the instance ID", target)
+	}
 }
 
 func buildInstanceDashboardURL(instanceID string) (string, error) {

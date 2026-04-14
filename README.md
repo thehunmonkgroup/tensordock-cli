@@ -129,6 +129,6 @@ Compatibility aliases:
 - `--storage` for `--diskGb`
 
 ```sh
-tensordock-cli servers ssh [instance_id]
-tensordock-cli servers ssh [instance_id] --extraFlags="-i /path/to/key -p 2222"
+tensordock-cli servers ssh [instance_id_or_name]
+tensordock-cli servers ssh [instance_id_or_name] --extraFlags="-i /path/to/key -p 2222"
 ```
