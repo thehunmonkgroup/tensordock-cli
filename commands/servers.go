@@ -38,27 +38,27 @@ var (
 		RunE:  serverList,
 	}
 	infoCmd = &cobra.Command{
-		Use:   "info [flags] instance_id",
+		Use:   "info [flags] instance_id_or_name",
 		Short: "Get instance info",
 		Args:  cobra.ExactArgs(1),
 		RunE:  serverInfo,
 	}
 	startCmd = &cobra.Command{
-		Use:     "start [flags] instance_id",
+		Use:     "start [flags] instance_id_or_name",
 		Short:   "Start an instance",
 		Args:    cobra.ExactArgs(1),
 		RunE:    startServer,
 		PostRun: logAction("success"),
 	}
 	stopCmd = &cobra.Command{
-		Use:     "stop [flags] instance_id",
+		Use:     "stop [flags] instance_id_or_name",
 		Short:   "Stop an instance",
 		Args:    cobra.ExactArgs(1),
 		RunE:    stopServer,
 		PostRun: logAction("success"),
 	}
 	deleteCmd = &cobra.Command{
-		Use:     "delete [flags] instance_id",
+		Use:     "delete [flags] instance_id_or_name",
 		Short:   "Delete an instance",
 		Args:    cobra.ExactArgs(1),
 		RunE:    deleteServer,
@@ -71,7 +71,7 @@ var (
 		RunE:  deployServer,
 	}
 	manageCmd = &cobra.Command{
-		Use:   "manage instance_id",
+		Use:   "manage instance_id_or_name",
 		Short: "Open an instance in the TensorDock dashboard",
 		Args:  cobra.ExactArgs(1),
 		RunE:  manageServer,
@@ -83,7 +83,7 @@ var (
 		RunE:  sshServer,
 	}
 	modifyCmd = &cobra.Command{
-		Use:     "modify [flags] instance_id",
+		Use:     "modify [flags] instance_id_or_name",
 		Short:   "Modify instance resources",
 		Args:    cobra.ExactArgs(1),
 		RunE:    modifyServer,
@@ -123,7 +123,7 @@ func init() {
 	deployCmd.Flags().Int("storage", 100, "Storage in GB")
 
 	sshCmd.Flags().String("bin", "ssh", "Name of SSH client executable")
-	sshCmd.Flags().String("user", "user", "User account to use for login")
+	sshCmd.Flags().String("sshUser", "", "SSH user account to use for login")
 	sshCmd.Flags().String("extraFlags", "", "Extra flags to pass to the SSH client")
 
 	modifyCmd.Flags().Int("cpuCores", 0, "CPU cores (step of 2)")
@@ -166,8 +166,12 @@ func serverList(cmd *cobra.Command, args []string) error {
 }
 
 func serverInfo(cmd *cobra.Command, args []string) error {
-	commandDebugf("fetching server info id=%s", args[0])
-	instance, err := client.GetInstance(cmd.Context(), args[0])
+	instanceID, err := resolveInstanceIDByTarget(cmd, args[0])
+	if err != nil {
+		return err
+	}
+	commandDebugf("fetching server info target=%s id=%s", args[0], instanceID)
+	instance, err := client.GetInstance(cmd.Context(), instanceID)
 	if err != nil {
 		return err
 	}
@@ -206,20 +210,32 @@ func serverInfo(cmd *cobra.Command, args []string) error {
 }
 
 func startServer(cmd *cobra.Command, args []string) error {
-	commandDebugf("starting server id=%s", args[0])
-	_, err := client.StartInstance(cmd.Context(), args[0])
+	instanceID, err := resolveInstanceIDByTarget(cmd, args[0])
+	if err != nil {
+		return err
+	}
+	commandDebugf("starting server target=%s id=%s", args[0], instanceID)
+	_, err = client.StartInstance(cmd.Context(), instanceID)
 	return err
 }
 
 func stopServer(cmd *cobra.Command, args []string) error {
-	commandDebugf("stopping server id=%s", args[0])
-	_, err := client.StopInstance(cmd.Context(), args[0])
+	instanceID, err := resolveInstanceIDByTarget(cmd, args[0])
+	if err != nil {
+		return err
+	}
+	commandDebugf("stopping server target=%s id=%s", args[0], instanceID)
+	_, err = client.StopInstance(cmd.Context(), instanceID)
 	return err
 }
 
 func deleteServer(cmd *cobra.Command, args []string) error {
-	commandDebugf("deleting server id=%s", args[0])
-	_, err := client.DeleteInstance(cmd.Context(), args[0])
+	instanceID, err := resolveInstanceIDByTarget(cmd, args[0])
+	if err != nil {
+		return err
+	}
+	commandDebugf("deleting server target=%s id=%s", args[0], instanceID)
+	_, err = client.DeleteInstance(cmd.Context(), instanceID)
 	return err
 }
 
@@ -358,18 +374,22 @@ func deployServer(cmd *cobra.Command, args []string) error {
 }
 
 func manageServer(cmd *cobra.Command, args []string) error {
-	commandDebugf("preparing dashboard management URL for server id=%s", args[0])
-	_, err := client.GetInstance(cmd.Context(), args[0])
+	instanceID, err := resolveInstanceIDByTarget(cmd, args[0])
+	if err != nil {
+		return err
+	}
+	commandDebugf("preparing dashboard management URL for server target=%s id=%s", args[0], instanceID)
+	_, err = client.GetInstance(cmd.Context(), instanceID)
 	if err != nil {
 		return err
 	}
 
-	dashboardURL, err := buildInstanceDashboardURL(args[0])
+	dashboardURL, err := buildInstanceDashboardURL(instanceID)
 	if err != nil {
 		return err
 	}
 
-	commandDebugf("launching dashboard URL for server id=%s url=%s", args[0], debugutil.RedactURL(dashboardURL))
+	commandDebugf("launching dashboard URL for server id=%s url=%s", instanceID, debugutil.RedactURL(dashboardURL))
 	return openBrowser(cmd, dashboardURL)
 }
 
@@ -393,7 +413,7 @@ func sshServer(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	user, err := flags.GetString("user")
+	user, err := flags.GetString("sshUser")
 	if err != nil {
 		return err
 	}
@@ -406,7 +426,7 @@ func sshServer(cmd *cobra.Command, args []string) error {
 	if bin == "" {
 		return errors.New("ssh client executable cannot be empty")
 	}
-	user = strings.TrimSpace(user)
+	user = strings.TrimSpace(resolveSSHUser(cmd, user))
 	if user == "" {
 		return errors.New("ssh user cannot be empty")
 	}
@@ -434,7 +454,7 @@ func resolveInstanceIDByTarget(cmd *cobra.Command, target string) (string, error
 
 	for _, instance := range instances {
 		if instance.ID == target {
-			commandDebugf("resolved ssh target=%q as instance id", target)
+			commandDebugf("resolved instance target=%q as instance id", target)
 			return instance.ID, nil
 		}
 	}
@@ -450,11 +470,19 @@ func resolveInstanceIDByTarget(cmd *cobra.Command, target string) (string, error
 	case 0:
 		return "", fmt.Errorf("no instance found matching %q; use `tensordock-cli servers list` to find the instance ID or exact name", target)
 	case 1:
-		commandDebugf("resolved ssh target=%q as instance name id=%s", target, matches[0].ID)
+		commandDebugf("resolved instance target=%q as instance name id=%s", target, matches[0].ID)
 		return matches[0].ID, nil
 	default:
 		return "", fmt.Errorf("multiple instances share the name %q; use `tensordock-cli servers list` and retry with the instance ID", target)
 	}
+}
+
+func resolveSSHUser(cmd *cobra.Command, flagValue string) string {
+	if cmd != nil && cmd.Flags().Changed("sshUser") {
+		return flagValue
+	}
+
+	return viper.GetString("sshUser")
 }
 
 func buildInstanceDashboardURL(instanceID string) (string, error) {
@@ -510,11 +538,15 @@ func logAction(message string) func(*cobra.Command, []string) {
 
 func modifyServer(cmd *cobra.Command, args []string) error {
 	flags := cmd.Flags()
-	instance, err := client.GetInstance(cmd.Context(), args[0])
+	instanceID, err := resolveInstanceIDByTarget(cmd, args[0])
 	if err != nil {
 		return err
 	}
-	commandDebugf("modifying server id=%s current_status=%q", args[0], instance.Status)
+	instance, err := client.GetInstance(cmd.Context(), instanceID)
+	if err != nil {
+		return err
+	}
+	commandDebugf("modifying server target=%s id=%s current_status=%q", args[0], instanceID, instance.Status)
 	if instance.Status != "Stopped" && instance.Status != "StoppedDisassociated" && strings.ToLower(instance.Status) != "stopped" && strings.ToLower(instance.Status) != "stoppeddisassociated" {
 		return errors.New("instance must be stopped or stopped-disassociated before modification")
 	}
@@ -541,7 +573,7 @@ func modifyServer(cmd *cobra.Command, args []string) error {
 	}
 	commandDebugf(
 		"modify resource request id=%s cpu=%d cpu_source=%q ram=%d ram_source=%q disk=%d disk_source=%q gpu_model=%q gpu_count=%d",
-		args[0],
+		instanceID,
 		cpuCores,
 		changedFlagName(flags, "cpuCores", "vcpus"),
 		ramGB,
@@ -591,7 +623,7 @@ func modifyServer(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	_, err = client.ModifyInstance(cmd.Context(), args[0], request)
+	_, err = client.ModifyInstance(cmd.Context(), instanceID, request)
 	return err
 }
 

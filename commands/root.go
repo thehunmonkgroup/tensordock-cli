@@ -128,6 +128,7 @@ func initConfig() {
 	viper.SetDefault("serviceUrl", "https://dashboard.tensordock.com/api/v2")
 	viper.SetDefault("allowInsecureHTTP", false)
 	viper.SetDefault("apiTokenEnvVar", defaultAPITokenEnvVar)
+	viper.SetDefault("sshUser", "user")
 	commandDebugf("config path selected file=%s", viper.ConfigFileUsed())
 
 	err := viper.ReadInConfig()

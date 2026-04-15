@@ -24,8 +24,9 @@ var (
 			apiTokenEnvVarChanged := flags.Changed("apiTokenEnvVar")
 			serviceURLChanged := flags.Changed("serviceUrl")
 			allowInsecureHTTPChanged := flags.Changed("allowInsecureHTTP")
+			sshUserChanged := flags.Changed("sshUser")
 
-			if !apiTokenChanged && !apiTokenEnvVarChanged && !serviceURLChanged && !allowInsecureHTTPChanged {
+			if !apiTokenChanged && !apiTokenEnvVarChanged && !serviceURLChanged && !allowInsecureHTTPChanged && !sshUserChanged {
 				return fmt.Errorf("at least one config flag must be provided")
 			}
 
@@ -43,6 +44,13 @@ var (
 			}
 			if apiTokenEnvVarChanged && apiTokenEnvVar == "" {
 				return fmt.Errorf("api token environment variable name cannot be empty")
+			}
+			sshUser, err := flags.GetString("sshUser")
+			if err != nil {
+				return err
+			}
+			if sshUserChanged && strings.TrimSpace(sshUser) == "" {
+				return fmt.Errorf("ssh user cannot be empty")
 			}
 
 			updates := make(map[string]any)
@@ -108,12 +116,17 @@ var (
 				}
 			}
 
+			if sshUserChanged {
+				updates["sshUser"] = strings.TrimSpace(sshUser)
+			}
+
 			commandDebugf(
-				"config update requested api_token_changed=%t api_token_env_var_changed=%t service_url_changed=%t allow_insecure_http_changed=%t",
+				"config update requested api_token_changed=%t api_token_env_var_changed=%t service_url_changed=%t allow_insecure_http_changed=%t ssh_user_changed=%t",
 				apiTokenChanged,
 				apiTokenEnvVarChanged,
 				serviceURLChanged,
 				allowInsecureHTTPChanged,
+				sshUserChanged,
 			)
 			commandDebugf("writing config file=%s", viper.ConfigFileUsed())
 			return writeExplicitConfigUpdates(viper.ConfigFileUsed(), updates)
@@ -129,6 +142,7 @@ func init() {
 	configCmd.Flags().String("apiTokenEnvVar", "", "Environment variable containing the API token")
 	configCmd.Flags().String("serviceUrl", "https://dashboard.tensordock.com/api/v2", "Service URL")
 	configCmd.Flags().Bool("allowInsecureHTTP", false, "Allow an insecure http service URL")
+	configCmd.Flags().String("sshUser", "", "Default SSH user account for servers ssh")
 	configCmd.MarkFlagsMutuallyExclusive("apiToken", "apiTokenEnvVar")
 	rootCmd.AddCommand(configCmd)
 }

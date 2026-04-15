@@ -35,6 +35,12 @@ tensordock-cli config --apiTokenEnvVar CUSTOM_API_TOKEN
 
 You can also pass `--apiToken` or `--apiTokenEnvVar` on individual commands.
 
+To store a default SSH login user for `servers ssh`:
+
+```sh
+tensordock-cli config --sshUser ubuntu
+```
+
 ## Configuration Notes
 
 The default API base URL is `https://dashboard.tensordock.com/api/v2`.
@@ -55,11 +61,11 @@ If you switch between stored auth types, the CLI warns and asks for confirmation
 
 ```sh
 tensordock-cli servers list
-tensordock-cli servers info [instance_id]
-tensordock-cli servers start [instance_id]
-tensordock-cli servers stop [instance_id]
-tensordock-cli servers delete [instance_id]
-tensordock-cli servers manage [instance_id]
+tensordock-cli servers info [instance_id_or_name]
+tensordock-cli servers start [instance_id_or_name]
+tensordock-cli servers stop [instance_id_or_name]
+tensordock-cli servers delete [instance_id_or_name]
+tensordock-cli servers manage [instance_id_or_name]
 tensordock-cli secrets list
 tensordock-cli locations list --gpu geforcertx4090-pcie-24gb
 tensordock-cli hostnodes list --location [location_id] --gpu geforcertx4090-pcie-24gb
@@ -114,7 +120,7 @@ Additional deploy options:
 ## Modify or Access an Instance
 
 ```sh
-tensordock-cli servers modify [instance_id] \
+tensordock-cli servers modify [instance_id_or_name] \
   --cpuCores 8 \
   --ramGb 32 \
   --diskGb 200 \
@@ -130,5 +136,6 @@ Compatibility aliases:
 
 ```sh
 tensordock-cli servers ssh [instance_id_or_name]
+tensordock-cli servers ssh [instance_id_or_name] --sshUser ubuntu
 tensordock-cli servers ssh [instance_id_or_name] --extraFlags="-i /path/to/key -p 2222"
 ```
