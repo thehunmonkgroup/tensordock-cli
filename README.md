@@ -1,6 +1,6 @@
 # tensordock-cli
 
-A CLI client for the TensorDock v2 API.
+A CLI client for the [TensorDock v2 API](https://dashboard.tensordock.com/api/docs).
 
 ## Installation
 
@@ -15,6 +15,8 @@ Build locally with Go 1.23+:
 ```sh
 go build
 ```
+
+Or grab one of the binaries from an [official release](/releases)
 
 ## Quick Start
 
