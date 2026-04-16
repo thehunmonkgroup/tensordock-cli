@@ -47,6 +47,10 @@ By default, config is stored in `config.yml` under the OS user config directory 
 
 Use `--configDir` to override the config directory location.
 
+Deploy templates live under the OS user config directory in `templates/`. On Linux this is typically `$XDG_CONFIG_HOME/tensordock-cli/templates`, or `~/.config/tensordock-cli/templates` when `XDG_CONFIG_HOME` is not set.
+
+Use `--templateDir` to override the template directory location.
+
 The default API base URL is `https://dashboard.tensordock.com/api/v2`.
 
 To use a different API endpoint:
@@ -111,6 +115,7 @@ tensordock-cli servers deploy my-instance \
 Additional deploy options:
 
 - `--dedicatedIp`
+- `--template name` to load `name.yml` from the template directory
 - `--cloudInitFile path/to/cloud-init.yaml`
 - `--cloudInitRunCmd "echo hello"` (repeatable)
 - `--cloudInitPackage curl` (repeatable)
@@ -120,6 +125,35 @@ Additional deploy options:
 - compatibility alias `--os` for simple image mapping
 
 `--cloudInitFile` cannot be combined with the explicit `cloud_init` flags.
+
+Deploy template example:
+
+```yaml
+locationId: [location_id]
+image: ubuntu2404
+gpuModel: geforcertx4090-pcie-24gb
+gpuCount: 1
+vcpus: 4
+ram: 8
+storage: 100
+sshKeySecretId: [secret_id]
+portForward:
+  - "22:30022"
+cloudInitRunCmd:
+  - echo hello
+```
+
+If the file is stored as `~/.config/tensordock-cli/templates/foo.yml`, deploy with:
+
+```sh
+tensordock-cli servers deploy my-instance --template foo
+```
+
+Explicit deploy flags override values loaded from the template:
+
+```sh
+tensordock-cli servers deploy my-instance --template foo --ram 16
+```
 
 ## Modify or Access an Instance
 

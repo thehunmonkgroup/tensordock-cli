@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,52 @@ import (
 const maxCloudInitBytes = 1 << 20
 
 var cloudInitPermissionsPattern = regexp.MustCompile(`^[0-7]{3,4}$`)
+
+type deployTemplate struct {
+	LocationID              *string  `yaml:"locationId"`
+	HostnodeID              *string  `yaml:"hostnodeId"`
+	Image                   *string  `yaml:"image"`
+	OS                      *string  `yaml:"os"`
+	DedicatedIP             *bool    `yaml:"dedicatedIp"`
+	PortForward             []string `yaml:"portForward"`
+	SSHKey                  *string  `yaml:"sshKey"`
+	SSHKeySecretID          *string  `yaml:"sshKeySecretId"`
+	CloudInitFile           *string  `yaml:"cloudInitFile"`
+	CloudInitRunCmd         []string `yaml:"cloudInitRunCmd"`
+	CloudInitPackage        []string `yaml:"cloudInitPackage"`
+	CloudInitPackageUpdate  *bool    `yaml:"cloudInitPackageUpdate"`
+	CloudInitPackageUpgrade *bool    `yaml:"cloudInitPackageUpgrade"`
+	CloudInitWriteFile      []string `yaml:"cloudInitWriteFile"`
+	GPUModel                *string  `yaml:"gpuModel"`
+	GPUCount                *int     `yaml:"gpuCount"`
+	VCPUs                   *int     `yaml:"vcpus"`
+	RAM                     *int     `yaml:"ram"`
+	Storage                 *int     `yaml:"storage"`
+}
+
+type deployOptions struct {
+	locationID              string
+	hostnodeID              string
+	image                   string
+	osValue                 string
+	dedicatedIP             bool
+	portForwardFlags        []string
+	sshKey                  string
+	sshKeySecretID          string
+	cloudInitFile           string
+	cloudInitRunCmd         []string
+	cloudInitPackage        []string
+	cloudInitPackageUpdate  bool
+	cloudInitPackageUpgrade bool
+	cloudInitWriteFile      []string
+	gpuModel                string
+	gpuCount                int
+	vcpus                   int
+	ram                     int
+	storage                 int
+	templateName            string
+	templatePath            string
+}
 
 var (
 	serversCmd = &cobra.Command{
@@ -104,6 +151,7 @@ func init() {
 
 	deployCmd.Flags().String("locationId", "", "Location UUID for location-based deployment")
 	deployCmd.Flags().String("hostnodeId", "", "Hostnode UUID for direct deployment")
+	deployCmd.Flags().String("template", "", "Deploy template name from the template directory")
 	deployCmd.Flags().String("image", "ubuntu2404", "Image identifier")
 	deployCmd.Flags().String("os", "", "Compatibility alias for --image")
 	deployCmd.Flags().Bool("dedicatedIp", false, "Request a dedicated IP")
@@ -240,84 +288,58 @@ func deleteServer(cmd *cobra.Command, args []string) error {
 }
 
 func deployServer(cmd *cobra.Command, args []string) error {
-	flags := cmd.Flags()
-	locationID, err := flags.GetString("locationId")
+	options, err := resolveDeployOptions(cmd)
 	if err != nil {
 		return err
 	}
-	hostnodeID, err := flags.GetString("hostnodeId")
-	if err != nil {
-		return err
-	}
-	if locationID == "" && hostnodeID == "" {
+	if options.locationID == "" && options.hostnodeID == "" {
 		return errors.New("either --locationId or --hostnodeId is required")
 	}
-	if locationID != "" && hostnodeID != "" {
+	if options.locationID != "" && options.hostnodeID != "" {
 		return errors.New("--locationId and --hostnodeId are mutually exclusive")
 	}
-	commandDebugf("deploy target name=%q location_id=%q hostnode_id=%q", args[0], locationID, hostnodeID)
+	commandDebugf(
+		"deploy target name=%q location_id=%q hostnode_id=%q template_name=%q template_path=%q",
+		args[0],
+		options.locationID,
+		options.hostnodeID,
+		options.templateName,
+		options.templatePath,
+	)
 
-	image, err := resolvedImage(flags)
+	image, err := resolvedImageValues(options.image, options.osValue)
 	if err != nil {
 		return err
 	}
-	gpuModel, err := flags.GetString("gpuModel")
+	portForwards, err := parsePortForwards(options.portForwardFlags)
 	if err != nil {
 		return err
 	}
-	gpuCount, err := flags.GetInt("gpuCount")
+	sshKey, sshKeySource, err := resolveSSHKeyValues(cmd, options.sshKey, options.sshKeySecretID)
 	if err != nil {
 		return err
 	}
-	vcpus, err := flags.GetInt("vcpus")
-	if err != nil {
-		return err
-	}
-	ram, err := flags.GetInt("ram")
-	if err != nil {
-		return err
-	}
-	storage, err := flags.GetInt("storage")
-	if err != nil {
-		return err
-	}
-	dedicatedIP, err := flags.GetBool("dedicatedIp")
-	if err != nil {
-		return err
-	}
-	portForwardFlags, err := flags.GetStringArray("portForward")
-	if err != nil {
-		return err
-	}
-	portForwards, err := parsePortForwards(portForwardFlags)
-	if err != nil {
-		return err
-	}
-	sshKey, sshKeySource, err := resolveSSHKey(cmd, flags)
-	if err != nil {
-		return err
-	}
-	cloudInitRaw, cloudInitFormat, err := resolveCloudInit(flags)
+	cloudInitRaw, cloudInitFormat, err := resolveCloudInitValues(options)
 	if err != nil {
 		return err
 	}
 
-	if storage < 100 {
+	if options.storage < 100 {
 		return errors.New("storage must be at least 100 GB")
 	}
-	if vcpus < 1 {
+	if options.vcpus < 1 {
 		return errors.New("vcpus must be at least 1")
 	}
-	if ram < 1 {
+	if options.ram < 1 {
 		return errors.New("ram must be at least 1 GB")
 	}
-	if gpuCount < 0 {
+	if options.gpuCount < 0 {
 		return errors.New("gpuCount cannot be negative")
 	}
-	if (gpuModel == "") != (gpuCount == 0) {
+	if (options.gpuModel == "") != (options.gpuCount == 0) {
 		return errors.New("both --gpuModel and --gpuCount are required when specifying GPUs")
 	}
-	if locationID != "" && gpuCount < 1 {
+	if options.locationID != "" && options.gpuCount < 1 {
 		return errors.New("location-based deployment requires at least one GPU")
 	}
 	if !strings.HasPrefix(strings.ToLower(image), "windows") && strings.TrimSpace(sshKey) == "" {
@@ -330,33 +352,35 @@ func deployServer(cmd *cobra.Command, args []string) error {
 	request.Data.Attributes.Type = "virtualmachine"
 	request.Data.Attributes.Image = image
 	request.Data.Attributes.Resources = api.InstanceResources{
-		VCPUCount: vcpus,
-		RAMGB:     ram,
-		StorageGB: storage,
+		VCPUCount: options.vcpus,
+		RAMGB:     options.ram,
+		StorageGB: options.storage,
 	}
-	if gpuCount > 0 && gpuModel != "" {
+	if options.gpuCount > 0 && options.gpuModel != "" {
 		request.Data.Attributes.Resources.GPUs = map[string]api.GPUCount{
-			gpuModel: {Count: gpuCount},
+			options.gpuModel: {Count: options.gpuCount},
 		}
 	}
-	request.Data.Attributes.LocationID = locationID
-	request.Data.Attributes.HostnodeID = hostnodeID
-	request.Data.Attributes.UseDedicatedIP = dedicatedIP
+	request.Data.Attributes.LocationID = options.locationID
+	request.Data.Attributes.HostnodeID = options.hostnodeID
+	request.Data.Attributes.UseDedicatedIP = options.dedicatedIP
 	request.Data.Attributes.PortForwards = portForwards
 	request.Data.Attributes.SSHKey = sshKey
 	request.Data.Attributes.CloudInit = cloudInitRaw
 
 	deploySummary := map[string]interface{}{
 		"name":             args[0],
+		"template_name":    options.templateName,
+		"template_path":    options.templatePath,
 		"image":            image,
-		"location_id":      locationID,
-		"hostnode_id":      hostnodeID,
-		"gpu_model":        gpuModel,
-		"gpu_count":        gpuCount,
-		"vcpus":            vcpus,
-		"ram_gb":           ram,
-		"storage_gb":       storage,
-		"dedicated_ip":     dedicatedIP,
+		"location_id":      options.locationID,
+		"hostnode_id":      options.hostnodeID,
+		"gpu_model":        options.gpuModel,
+		"gpu_count":        options.gpuCount,
+		"vcpus":            options.vcpus,
+		"ram_gb":           options.ram,
+		"storage_gb":       options.storage,
+		"dedicated_ip":     options.dedicatedIP,
 		"port_forwards":    len(portForwards),
 		"ssh_key_source":   sshKeySource,
 		"cloud_init_type":  cloudInitFormat,
@@ -370,6 +394,316 @@ func deployServer(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println(instance.ID)
+	return nil
+}
+
+func resolveDeployOptions(cmd *cobra.Command) (deployOptions, error) {
+	flags := cmd.Flags()
+	options := deployOptions{
+		image:   "ubuntu2404",
+		vcpus:   4,
+		ram:     8,
+		storage: 100,
+	}
+
+	templateName, err := flags.GetString("template")
+	if err != nil {
+		return deployOptions{}, err
+	}
+	if templateName != "" {
+		template, templatePath, err := loadDeployTemplate(templateName)
+		if err != nil {
+			return deployOptions{}, err
+		}
+		options.templateName = templateName
+		options.templatePath = templatePath
+		applyDeployTemplate(&options, template, filepath.Dir(templatePath))
+	}
+
+	if err := applyDeployFlagOverrides(flags, &options); err != nil {
+		return deployOptions{}, err
+	}
+
+	return options, nil
+}
+
+func loadDeployTemplate(name string) (deployTemplate, string, error) {
+	resolvedName, err := validateTemplateName(name)
+	if err != nil {
+		return deployTemplate{}, "", err
+	}
+
+	dir, err := resolveTemplateDir(templateDir)
+	if err != nil {
+		return deployTemplate{}, "", err
+	}
+
+	templatePath := filepath.Join(dir, resolvedName+".yml")
+	raw, err := os.ReadFile(templatePath)
+	if err != nil {
+		return deployTemplate{}, "", err
+	}
+
+	var template deployTemplate
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&template); err != nil {
+		return deployTemplate{}, "", fmt.Errorf("invalid deploy template %q: %w", resolvedName, err)
+	}
+
+	commandDebugf("loaded deploy template name=%q path=%s bytes=%d", resolvedName, templatePath, len(raw))
+	return template, templatePath, nil
+}
+
+func validateTemplateName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", errors.New("template name cannot be empty")
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return "", errors.New("template name must not include path separators")
+	}
+	if filepath.Ext(name) != "" {
+		return "", errors.New("template name must not include a file extension")
+	}
+	return name, nil
+}
+
+func applyDeployTemplate(options *deployOptions, template deployTemplate, templateDir string) {
+	if template.LocationID != nil {
+		options.locationID = *template.LocationID
+	}
+	if template.HostnodeID != nil {
+		options.hostnodeID = *template.HostnodeID
+	}
+	if template.Image != nil {
+		options.image = *template.Image
+	}
+	if template.OS != nil {
+		options.osValue = *template.OS
+	}
+	if template.DedicatedIP != nil {
+		options.dedicatedIP = *template.DedicatedIP
+	}
+	if template.PortForward != nil {
+		options.portForwardFlags = append([]string(nil), template.PortForward...)
+	}
+	if template.SSHKey != nil {
+		options.sshKey = *template.SSHKey
+	}
+	if template.SSHKeySecretID != nil {
+		options.sshKeySecretID = *template.SSHKeySecretID
+	}
+	if template.CloudInitFile != nil {
+		options.cloudInitFile = resolveTemplateRelativePath(templateDir, *template.CloudInitFile)
+	}
+	if template.CloudInitRunCmd != nil {
+		options.cloudInitRunCmd = append([]string(nil), template.CloudInitRunCmd...)
+	}
+	if template.CloudInitPackage != nil {
+		options.cloudInitPackage = append([]string(nil), template.CloudInitPackage...)
+	}
+	if template.CloudInitPackageUpdate != nil {
+		options.cloudInitPackageUpdate = *template.CloudInitPackageUpdate
+	}
+	if template.CloudInitPackageUpgrade != nil {
+		options.cloudInitPackageUpgrade = *template.CloudInitPackageUpgrade
+	}
+	if template.CloudInitWriteFile != nil {
+		options.cloudInitWriteFile = append([]string(nil), template.CloudInitWriteFile...)
+	}
+	if template.GPUModel != nil {
+		options.gpuModel = *template.GPUModel
+	}
+	if template.GPUCount != nil {
+		options.gpuCount = *template.GPUCount
+	}
+	if template.VCPUs != nil {
+		options.vcpus = *template.VCPUs
+	}
+	if template.RAM != nil {
+		options.ram = *template.RAM
+	}
+	if template.Storage != nil {
+		options.storage = *template.Storage
+	}
+}
+
+func resolveTemplateRelativePath(templateDir string, value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || filepath.IsAbs(value) {
+		return value
+	}
+	return filepath.Join(templateDir, value)
+}
+
+func applyDeployFlagOverrides(flags *pflag.FlagSet, options *deployOptions) error {
+	if flags.Changed("locationId") {
+		value, err := flags.GetString("locationId")
+		if err != nil {
+			return err
+		}
+		options.locationID = value
+		if !flags.Changed("hostnodeId") {
+			options.hostnodeID = ""
+		}
+	}
+	if flags.Changed("hostnodeId") {
+		value, err := flags.GetString("hostnodeId")
+		if err != nil {
+			return err
+		}
+		options.hostnodeID = value
+		if !flags.Changed("locationId") {
+			options.locationID = ""
+		}
+	}
+	if flags.Changed("image") {
+		value, err := flags.GetString("image")
+		if err != nil {
+			return err
+		}
+		options.image = value
+		if !flags.Changed("os") {
+			options.osValue = ""
+		}
+	}
+	if flags.Changed("os") {
+		value, err := flags.GetString("os")
+		if err != nil {
+			return err
+		}
+		options.osValue = value
+	}
+	if flags.Changed("dedicatedIp") {
+		value, err := flags.GetBool("dedicatedIp")
+		if err != nil {
+			return err
+		}
+		options.dedicatedIP = value
+	}
+	if flags.Changed("portForward") {
+		value, err := flags.GetStringArray("portForward")
+		if err != nil {
+			return err
+		}
+		options.portForwardFlags = value
+	}
+	if flags.Changed("sshKey") {
+		value, err := flags.GetString("sshKey")
+		if err != nil {
+			return err
+		}
+		options.sshKey = value
+		if !flags.Changed("sshKeySecretId") {
+			options.sshKeySecretID = ""
+		}
+	}
+	if flags.Changed("sshKeySecretId") {
+		value, err := flags.GetString("sshKeySecretId")
+		if err != nil {
+			return err
+		}
+		options.sshKeySecretID = value
+		if !flags.Changed("sshKey") {
+			options.sshKey = ""
+		}
+	}
+
+	cloudInitFlagsChanged := flags.Changed("cloudInitRunCmd") ||
+		flags.Changed("cloudInitPackage") ||
+		flags.Changed("cloudInitPackageUpdate") ||
+		flags.Changed("cloudInitPackageUpgrade") ||
+		flags.Changed("cloudInitWriteFile")
+
+	if flags.Changed("cloudInitFile") {
+		value, err := flags.GetString("cloudInitFile")
+		if err != nil {
+			return err
+		}
+		options.cloudInitFile = value
+		if !cloudInitFlagsChanged {
+			options.cloudInitRunCmd = nil
+			options.cloudInitPackage = nil
+			options.cloudInitPackageUpdate = false
+			options.cloudInitPackageUpgrade = false
+			options.cloudInitWriteFile = nil
+		}
+	}
+	if flags.Changed("cloudInitRunCmd") {
+		value, err := flags.GetStringArray("cloudInitRunCmd")
+		if err != nil {
+			return err
+		}
+		options.cloudInitRunCmd = value
+	}
+	if flags.Changed("cloudInitPackage") {
+		value, err := flags.GetStringArray("cloudInitPackage")
+		if err != nil {
+			return err
+		}
+		options.cloudInitPackage = value
+	}
+	if flags.Changed("cloudInitPackageUpdate") {
+		value, err := flags.GetBool("cloudInitPackageUpdate")
+		if err != nil {
+			return err
+		}
+		options.cloudInitPackageUpdate = value
+	}
+	if flags.Changed("cloudInitPackageUpgrade") {
+		value, err := flags.GetBool("cloudInitPackageUpgrade")
+		if err != nil {
+			return err
+		}
+		options.cloudInitPackageUpgrade = value
+	}
+	if flags.Changed("cloudInitWriteFile") {
+		value, err := flags.GetStringArray("cloudInitWriteFile")
+		if err != nil {
+			return err
+		}
+		options.cloudInitWriteFile = value
+	}
+	if flags.Changed("gpuModel") {
+		value, err := flags.GetString("gpuModel")
+		if err != nil {
+			return err
+		}
+		options.gpuModel = value
+	}
+	if flags.Changed("gpuCount") {
+		value, err := flags.GetInt("gpuCount")
+		if err != nil {
+			return err
+		}
+		options.gpuCount = value
+	}
+	if flags.Changed("vcpus") {
+		value, err := flags.GetInt("vcpus")
+		if err != nil {
+			return err
+		}
+		options.vcpus = value
+	}
+	if flags.Changed("ram") {
+		value, err := flags.GetInt("ram")
+		if err != nil {
+			return err
+		}
+		options.ram = value
+	}
+	if flags.Changed("storage") {
+		value, err := flags.GetInt("storage")
+		if err != nil {
+			return err
+		}
+		options.storage = value
+	}
+	if cloudInitFlagsChanged && !flags.Changed("cloudInitFile") {
+		options.cloudInitFile = ""
+	}
+
 	return nil
 }
 
@@ -662,6 +996,10 @@ func resolvedImage(flags *pflag.FlagSet) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return resolvedImageValues(image, osValue)
+}
+
+func resolvedImageValues(image string, osValue string) (string, error) {
 	if osValue == "" {
 		return image, nil
 	}
@@ -706,6 +1044,28 @@ func resolveSSHKey(cmd *cobra.Command, flags *pflag.FlagSet) (string, string, er
 	return secret.Value, fmt.Sprintf("secret:%s", secretID), nil
 }
 
+func resolveSSHKeyValues(cmd *cobra.Command, sshKey string, secretID string) (string, string, error) {
+	if sshKey != "" && secretID != "" {
+		return "", "", errors.New("--sshKey and --sshKeySecretId are mutually exclusive")
+	}
+	if secretID == "" {
+		if strings.TrimSpace(sshKey) == "" {
+			return sshKey, "none", nil
+		}
+		return sshKey, "inline", nil
+	}
+
+	secret, err := client.GetSecret(cmd.Context(), secretID)
+	if err != nil {
+		return "", "", err
+	}
+	if secret.Value == "" {
+		return "", "", errors.New("the selected secret did not return a usable SSH key value")
+	}
+	commandDebugf("resolved ssh key from secret id=%s", secretID)
+	return secret.Value, fmt.Sprintf("secret:%s", secretID), nil
+}
+
 func resolveCloudInit(flags *pflag.FlagSet) (json.RawMessage, string, error) {
 	filePath, err := flags.GetString("cloudInitFile")
 	if err != nil {
@@ -721,6 +1081,30 @@ func resolveCloudInit(flags *pflag.FlagSet) (json.RawMessage, string, error) {
 	}
 	if filePath != "" {
 		return readCloudInitFile(filePath)
+	}
+	if explicitRaw != nil {
+		return explicitRaw, explicitFormat, nil
+	}
+
+	return nil, "none", nil
+}
+
+func resolveCloudInitValues(options deployOptions) (json.RawMessage, string, error) {
+	explicitRaw, explicitFormat, err := buildCloudInitFromValues(
+		options.cloudInitRunCmd,
+		options.cloudInitPackage,
+		options.cloudInitPackageUpdate,
+		options.cloudInitPackageUpgrade,
+		options.cloudInitWriteFile,
+	)
+	if err != nil {
+		return nil, "", err
+	}
+	if options.cloudInitFile != "" && explicitRaw != nil {
+		return nil, "", errors.New("--cloudInitFile cannot be combined with other cloud-init flags")
+	}
+	if options.cloudInitFile != "" {
+		return readCloudInitFile(options.cloudInitFile)
 	}
 	if explicitRaw != nil {
 		return explicitRaw, explicitFormat, nil
@@ -789,6 +1173,10 @@ func buildCloudInitFromFlags(flags *pflag.FlagSet) (json.RawMessage, string, err
 		return nil, "", nil
 	}
 
+	return buildCloudInitFromValues(runCmds, packages, packageUpdate, packageUpgrade, writeFileFlags)
+}
+
+func buildCloudInitFromValues(runCmds []string, packages []string, packageUpdate bool, packageUpgrade bool, writeFileFlags []string) (json.RawMessage, string, error) {
 	cloudInit := map[string]interface{}{}
 	if len(runCmds) > 0 {
 		cloudInit["runcmd"] = runCmds
@@ -796,10 +1184,10 @@ func buildCloudInitFromFlags(flags *pflag.FlagSet) (json.RawMessage, string, err
 	if len(packages) > 0 {
 		cloudInit["packages"] = packages
 	}
-	if flags.Changed("cloudInitPackageUpdate") {
+	if packageUpdate {
 		cloudInit["package_update"] = packageUpdate
 	}
-	if flags.Changed("cloudInitPackageUpgrade") {
+	if packageUpgrade {
 		cloudInit["package_upgrade"] = packageUpgrade
 	}
 	if len(writeFileFlags) > 0 {

@@ -12,6 +12,7 @@ import (
 
 var (
 	configDir         string
+	templateDir       string
 	client            *api.Client
 	allowInsecureHTTP bool
 
@@ -60,6 +61,7 @@ var (
 const defaultAPITokenEnvVar = "TENSORDOCK_API_TOKEN"
 const defaultConfigDirName = "tensordock-cli"
 const defaultConfigFileName = "config.yml"
+const defaultTemplatesDirName = "templates"
 
 const rootHelpTemplate = `TensorDock v2 CLI {{.Root.Version}}
 
@@ -105,6 +107,7 @@ func init() {
 
 	pflags := rootCmd.PersistentFlags()
 	pflags.StringVar(&configDir, "configDir", "", "config directory (default is $XDG_CONFIG_HOME/tensordock-cli)")
+	pflags.StringVar(&templateDir, "templateDir", "", "template directory (default is $XDG_CONFIG_HOME/tensordock-cli/templates)")
 	pflags.String("apiToken", "", "API token")
 	pflags.String("apiTokenEnvVar", "", "Environment variable containing the API token")
 	pflags.BoolVar(&allowInsecureHTTP, "allowInsecureHTTP", false, "Allow an insecure http service URL")
@@ -140,16 +143,38 @@ func initConfig() {
 }
 
 func resolveConfigPath(explicitDir string) (string, error) {
+	configRoot, err := resolveAppConfigDir()
+	if err != nil {
+		return "", err
+	}
+
 	if explicitDir != "" {
 		return filepath.Join(explicitDir, defaultConfigFileName), nil
 	}
 
+	return filepath.Join(configRoot, defaultConfigFileName), nil
+}
+
+func resolveTemplateDir(explicitDir string) (string, error) {
+	if explicitDir != "" {
+		return explicitDir, nil
+	}
+
+	configRoot, err := resolveAppConfigDir()
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(configRoot, defaultTemplatesDirName), nil
+}
+
+func resolveAppConfigDir() (string, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
 
-	return filepath.Join(configDir, defaultConfigDirName, defaultConfigFileName), nil
+	return filepath.Join(configDir, defaultConfigDirName), nil
 }
 
 func resolveAPIToken(cmd *cobra.Command) (string, error) {
