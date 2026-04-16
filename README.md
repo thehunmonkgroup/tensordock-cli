@@ -16,7 +16,7 @@ Build locally with Go 1.23+:
 go build
 ```
 
-Or grab one of the binaries from an [official release](/releases)
+Or grab one of the binaries from an official release.
 
 ## Quick Start
 
