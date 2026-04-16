@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	cfgFile           string
+	configDir         string
 	client            *api.Client
 	allowInsecureHTTP bool
 
@@ -58,6 +58,8 @@ var (
 )
 
 const defaultAPITokenEnvVar = "TENSORDOCK_API_TOKEN"
+const defaultConfigDirName = "tensordock-cli"
+const defaultConfigFileName = "config.yml"
 
 const rootHelpTemplate = `TensorDock v2 CLI {{.Root.Version}}
 
@@ -102,7 +104,7 @@ func init() {
 	rootCmd.InitDefaultVersionFlag()
 
 	pflags := rootCmd.PersistentFlags()
-	pflags.StringVar(&cfgFile, "config", "", "config file (default is $HOME/.tensordock.yml)")
+	pflags.StringVar(&configDir, "configDir", "", "config directory (default is $XDG_CONFIG_HOME/tensordock-cli)")
 	pflags.String("apiToken", "", "API token")
 	pflags.String("apiTokenEnvVar", "", "Environment variable containing the API token")
 	pflags.BoolVar(&allowInsecureHTTP, "allowInsecureHTTP", false, "Allow an insecure http service URL")
@@ -116,14 +118,9 @@ func init() {
 }
 
 func initConfig() {
-	if cfgFile != "" {
-		viper.SetConfigFile(cfgFile)
-	} else {
-		home, err := os.UserHomeDir()
-		cobra.CheckErr(err)
-
-		viper.SetConfigFile(filepath.Join(home, ".tensordock.yml"))
-	}
+	configPath, err := resolveConfigPath(configDir)
+	cobra.CheckErr(err)
+	viper.SetConfigFile(configPath)
 
 	viper.SetDefault("serviceUrl", "https://dashboard.tensordock.com/api/v2")
 	viper.SetDefault("allowInsecureHTTP", false)
@@ -131,7 +128,7 @@ func initConfig() {
 	viper.SetDefault("sshUser", "user")
 	commandDebugf("config path selected file=%s", viper.ConfigFileUsed())
 
-	err := viper.ReadInConfig()
+	err = viper.ReadInConfig()
 	if err != nil {
 		commandDebugf("config file missing file=%s err=%v", viper.ConfigFileUsed(), err)
 	} else {
@@ -140,6 +137,19 @@ func initConfig() {
 
 	viper.AutomaticEnv()
 	commandDebugf("automatic environment resolution enabled")
+}
+
+func resolveConfigPath(explicitDir string) (string, error) {
+	if explicitDir != "" {
+		return filepath.Join(explicitDir, defaultConfigFileName), nil
+	}
+
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(configDir, defaultConfigDirName, defaultConfigFileName), nil
 }
 
 func resolveAPIToken(cmd *cobra.Command) (string, error) {

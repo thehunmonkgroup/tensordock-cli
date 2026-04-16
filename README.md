@@ -43,6 +43,10 @@ tensordock-cli config --sshUser ubuntu
 
 ## Configuration Notes
 
+By default, config is stored in `config.yml` under the OS user config directory for `tensordock-cli`. On Linux this is typically `$XDG_CONFIG_HOME/tensordock-cli/config.yml`, or `~/.config/tensordock-cli/config.yml` when `XDG_CONFIG_HOME` is not set.
+
+Use `--configDir` to override the config directory location.
+
 The default API base URL is `https://dashboard.tensordock.com/api/v2`.
 
 To use a different API endpoint:
